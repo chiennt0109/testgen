@@ -1,0 +1,1 @@
+{"name":"Graph BFS/DFS","schema":[{"type":"integer","name":"n","min":1,"max":100000,"layout":"same_line"},{"type":"integer","name":"m","min":0,"max":"n*(n-1)/2","newline":true},{"type":"graph","name":"edges","n":"n","m":"m","simple":true},{"type":"integer","name":"s","min":1,"max":"n"}],"test_profiles":["path","star","cycle","disconnected","random_sparse","dense"]}
