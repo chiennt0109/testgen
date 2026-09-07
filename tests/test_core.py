@@ -6,6 +6,7 @@ from app.core.engine import GenerationEngine
 from app.core.pipeline import GenerationPipeline
 from app.exporters import export_zip
 from app.generators.blocks import array,graph,query_list,tree
+from app.generators.queries import generate_queries
 from app.models import Project
 from app.core.stress import normalize_output
 
@@ -50,3 +51,79 @@ def test_duplicate_detection_and_folder_export(tmp_path:Path):
 
 def test_output_normalization():
     assert normalize_output("  1  2\n3\n") == "1 2 3"
+
+def test_schema_driven_range_query_dependencies():
+    spec = {
+        "count": 100,
+        "pattern": "random_range",
+        "query_types": [{
+            "name": "Range", "weight": 100,
+            "fields": [
+                {"name": "l", "type": "integer", "min": 1, "max": "n"},
+                {"name": "r", "type": "integer", "min": "l", "max": "n"},
+            ],
+        }],
+    }
+    rows = generate_queries(spec, {"n": 20}, random.Random(22))
+    assert len(rows) == 100
+    assert all(1 <= left <= right <= 20 for left, right in rows)
+
+def test_mixed_weighted_query_types_and_fixed_prefixes():
+    spec = {
+        "count": 200,
+        "query_types": [
+            {"name": "Update", "weight": 40, "prefix": 1, "fields": [
+                {"name": "i", "type": "integer", "min": 1, "max": "n"},
+                {"name": "x", "type": "integer", "min": -10**9, "max": 10**9},
+            ]},
+            {"name": "Range", "weight": 60, "prefix": 2, "fields": [
+                {"name": "l", "type": "integer", "min": 1, "max": "n"},
+                {"name": "r", "type": "integer", "min": "l", "max": "n"},
+            ]},
+        ],
+    }
+    rows = generate_queries(spec, {"n": 30}, random.Random(7))
+    assert {row[0] for row in rows} == {1, 2}
+    assert all(len(row) == 3 for row in rows)
+    assert all(row[0] != 2 or 1 <= row[1] <= row[2] <= 30 for row in rows)
+
+def test_query_output_layout_is_not_implicit():
+    base = {
+        "type": "query_list", "name": "queries", "count": 2,
+        "pattern": "whole_range",
+        "query_types": [{"name": "Range", "weight": 100, "fields": [
+            {"name": "l", "type": "integer", "min": 1, "max": "n"},
+            {"name": "r", "type": "integer", "min": "l", "max": "n"},
+        ]}],
+    }
+    multiline = Project(schema=[{"type": "integer", "name": "n", "min": 5, "max": 5, "newline": True}, {**base, "one_query_per_line": True}])
+    singleline = Project(schema=[{"type": "integer", "name": "n", "min": 5, "max": 5, "newline": True}, {**base, "one_query_per_line": False, "layout": "same_line"}])
+    assert GenerationEngine().generate(multiline, 1)[0].splitlines() == ["5", "1 5", "1 5"]
+    assert GenerationEngine().generate(singleline, 1)[0].splitlines() == ["5", "1 5 1 5"]
+
+@pytest.mark.parametrize("pattern", ["random_range", "single_point", "whole_range", "prefix", "suffix", "short_range", "long_range", "nested", "overlapping", "repeated"])
+def test_query_patterns_respect_schema(pattern):
+    spec = {
+        "count": 12, "pattern": pattern,
+        "query_types": [{"name": "Range", "weight": 100, "fields": [
+            {"name": "l", "type": "integer", "min": 1, "max": "n"},
+            {"name": "r", "type": "integer", "min": "l", "max": "n"},
+        ]}],
+    }
+    rows = generate_queries(spec, {"n": 20}, random.Random(19))
+    assert all(1 <= left <= right <= 20 for left, right in rows)
+    if pattern == "single_point": assert all(left == right for left, right in rows)
+    if pattern == "whole_range": assert all((left, right) == (1, 20) for left, right in rows)
+    if pattern == "prefix": assert all(left == 1 for left, _ in rows)
+    if pattern == "suffix": assert all(right == 20 for _, right in rows)
+
+def test_query_duplicate_avoid_and_sorted_order():
+    spec = {
+        "count": 5, "duplicate_policy": "avoid", "query_order": "sorted",
+        "query_types": [{"name": "Point", "weight": 100, "fields": [
+            {"name": "x", "type": "integer", "min": 1, "max": 20},
+        ]}],
+    }
+    rows = generate_queries(spec, {}, random.Random(31))
+    assert len(rows) == len(set(rows)) == 5
+    assert rows == sorted(rows, key=lambda row: tuple(str(value) for value in row))

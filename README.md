@@ -28,6 +28,19 @@ Linux/macOS dùng `source .venv/bin/activate`. App ghi lỗi vào `logs/app.log`
    Có thể nhân bản, xóa và đổi thứ tự block bằng các nút ngay trên danh sách.
    Trường nâng cao vẫn nhận một object JSON nhỏ nhưng không bắt buộc cho workflow
    thông thường.
+
+### Query List và Operation List
+
+Chọn block `Query List` rồi bấm **Chỉnh cấu trúc query…** để khai báo một hoặc
+nhiều query type. Mỗi type có tên, weight, fixed prefix/type code và bảng field.
+Field được sinh từ trái sang phải, vì vậy có thể nhập `r.min = l`, `r.max = n`
+hoặc tham chiếu bất kỳ biến đã sinh trước đó. Dialog cũng cấu hình duplicate
+policy, thứ tự query và lựa chọn **Mỗi query một dòng** hoặc ghép cùng dòng.
+
+Ví dụ range query dùng hai field `l: Integer [1,n]` và
+`r: Integer [l,n]`. Operation trộn có thể dùng type prefix `1` với fields `i,x`
+weight 40%, và prefix `2` với fields `l,r` weight 60%. Preset hoàn chỉnh nằm tại
+`presets/range_sum.json`.
 3. **Generate Preview** kiểm tra dữ liệu trong bộ nhớ; **Save As** lưu `project.json`.
 4. Đặt `solution.cpp` cạnh project. **Generate All** compile một lần, validate và xuất `.inp/.out`, rồi mới publish cả batch. Nếu đích đã tồn tại, app tạo `_V02` thay vì ghi đè.
 5. Manifest lưu seed riêng (`master_seed + index`) và SHA-256. Mở lại cùng project sẽ tái tạo input giống nhau.

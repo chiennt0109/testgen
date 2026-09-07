@@ -29,7 +29,13 @@ class GenerationEngine:
             layout=merged.get("layout","line")
             if isinstance(value,list):
                 if current: lines.append(" ".join(current)); current=[]
-                if value and isinstance(value[0],tuple): lines.extend(" ".join(map(str,row)) for row in value)
+                if value and isinstance(value[0],tuple):
+                    one_per_line = merged.get("one_query_per_line", layout != "same_line")
+                    rendered = [" ".join(map(str,row)) for row in value]
+                    if one_per_line:
+                        lines.extend(rendered)
+                    else:
+                        lines.append(" ".join(rendered))
                 else: lines.append(" ".join(map(str,value)))
             elif "\n" in str(value):
                 if current: lines.append(" ".join(current)); current=[]

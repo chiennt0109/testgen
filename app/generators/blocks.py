@@ -5,6 +5,7 @@ import random
 import string
 from typing import Any
 from app.core.constraints import ConstraintError, bounds, evaluate
+from app.generators.queries import generate_queries
 
 
 def scalar(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> int | float:
@@ -106,19 +107,9 @@ def tree(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> list[
     return edges
 
 
-def query_list(spec:dict[str,Any],ctx:dict[str,Any],rng:random.Random)->list[tuple[int,...]]:
-    count=int(evaluate(spec.get("count", "q"),ctx)); n=int(evaluate(spec.get("n","n"),ctx)); mode=spec.get("pattern","random_range").lower().replace(" ","_"); rows=[]
-    for i in range(count):
-        if mode=="single_point": l=r=rng.randint(1,n)
-        elif mode=="whole_range": l,r=1,n
-        elif mode=="prefix": l,r=1,rng.randint(1,n)
-        elif mode=="suffix": l,r=rng.randint(1,n),n
-        elif mode=="nested": l,r=1+i%n,n-i%n; l,r=(l,r) if l<=r else (r,l)
-        else: l=rng.randint(1,n); r=rng.randint(l,n)
-        row=[l,r]
-        if spec.get("format") == "l r x": row.append(rng.randint(*bounds(spec,ctx)))
-        rows.append(tuple(row))
-    return rows
+def query_list(spec:dict[str,Any],ctx:dict[str,Any],rng:random.Random)->list[tuple[Any,...]]:
+    """Compatibility alias for the schema-driven query generator."""
+    return generate_queries(spec, ctx, rng)
 
 
 def generate_block(spec:dict[str,Any],ctx:dict[str,Any],rng:random.Random)->Any:
@@ -127,7 +118,8 @@ def generate_block(spec:dict[str,Any],ctx:dict[str,Any],rng:random.Random)->Any:
     if kind in {"array","permutation"}: return array({**spec, **({"pattern":"permutation"} if kind=="permutation" else {})},ctx,rng)
     if kind in {"graph","weighted_graph"}: return graph({**spec,"weighted":kind=="weighted_graph" or spec.get("weighted",False)},ctx,rng)
     if kind in {"tree","weighted_tree"}: return tree({**spec,"weighted":kind=="weighted_tree" or spec.get("weighted",False)},ctx,rng)
-    if kind in {"query_list","interval_list"}: return query_list(spec,ctx,rng)
+    if kind in {"query_list","operation_list"}: return generate_queries(spec,ctx,rng)
+    if kind=="interval_list": return query_list(spec,ctx,rng)
     if kind=="real": lo,hi=bounds(spec,ctx); return rng.uniform(lo,hi)
     if kind=="string":
         n=int(evaluate(spec.get("length",10),ctx)); alphabet={"lowercase":string.ascii_lowercase,"uppercase":string.ascii_uppercase,"digits":string.digits,"binary":"01","letters":string.ascii_letters,"alphanumeric":string.ascii_letters+string.digits}.get(spec.get("alphabet","lowercase"),spec.get("custom_alphabet","abc")); p=spec.get("pattern","random").lower().replace(" ","_"); s="".join(rng.choice(alphabet) for _ in range(n)); return s if p=="random" else (alphabet[0]*n if p=="all_same" else (s[:(n+1)//2]+s[:n//2][::-1]))

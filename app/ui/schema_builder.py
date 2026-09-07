@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .query_editor import QuerySchemaDialog
+
 
 BLOCK_TYPES = [
     "Integer", "Long Long", "Real", "String", "Array", "Permutation",
@@ -123,6 +125,10 @@ class SchemaBuilder(QWidget):
         self.weight_max = QLineEdit("100")
         self.extra = QLineEdit()
         self.extra.setPlaceholderText('Tùy chọn nâng cao dạng JSON, ví dụ {"alphabet":"binary"}')
+        self.query_summary = QLabel()
+        self.query_summary.setWordWrap(True)
+        self.edit_queries = QPushButton("Chỉnh cấu trúc query…")
+        self.edit_queries.clicked.connect(self._edit_query_schema)
         form.addRow("Loại block", self.type_label)
         form.addRow("Tên biến", self.name)
         form.addRow("Giá trị nhỏ nhất", self.minimum)
@@ -142,7 +148,10 @@ class SchemaBuilder(QWidget):
         form.addRow("", self.weighted)
         form.addRow("Trọng số min", self.weight_min)
         form.addRow("Trọng số max", self.weight_max)
+        form.addRow("Query Types", self.query_summary)
+        form.addRow("", self.edit_queries)
         form.addRow("Tùy chọn khác", self.extra)
+        self.form = form
         scroll.setWidget(editor)
         splitter.addWidget(scroll)
         splitter.setStretchFactor(1, 1)
@@ -193,7 +202,19 @@ class SchemaBuilder(QWidget):
         elif "tree" in kind:
             block.update({"n": "n", "pattern": "random_tree"})
         elif kind in {"query_list", "interval_list", "operation_list"}:
-            block.update({"count": "q", "n": "n", "pattern": "random_range"})
+            block.update({"count": "q", "pattern": "random_range"})
+            if kind in {"query_list", "operation_list"}:
+                block.update({
+                    "duplicate_policy": "allow", "query_order": "random",
+                    "one_query_per_line": True,
+                    "query_types": [{
+                        "name": "Range Query", "weight": 100, "prefix": "",
+                        "fields": [
+                            {"name": "l", "type": "integer", "min": 1, "max": "n"},
+                            {"name": "r", "type": "integer", "min": "l", "max": "n"},
+                        ],
+                    }],
+                })
         self._schema.append(block)
         self._refresh(len(self._schema) - 1)
         self.schema_changed.emit()
@@ -269,16 +290,34 @@ class SchemaBuilder(QWidget):
         self.weight_max.setText(self._text(block.get("weight_max", 100)))
         known = {"type", "name", "min", "max", "length", "count", "n", "m",
                  "pattern", "layout", "newline", "distinct", "shuffle", "connected",
-                 "simple", "directed", "weighted", "weight_min", "weight_max"}
+                 "simple", "directed", "weighted", "weight_min", "weight_max",
+                 "query_types", "duplicate_policy", "query_order",
+                 "one_query_per_line", "custom_order"}
         extra = {key: value for key, value in block.items() if key not in known}
         self.extra.setText(json.dumps(extra, ensure_ascii=False) if extra else "")
+        is_query = kind in {"query_list", "operation_list"}
+        is_graph = "graph" in kind
+        self.form.setRowVisible(self.n_ref, is_graph or "tree" in kind)
+        self.form.setRowVisible(self.m_ref, is_graph)
+        self.form.setRowVisible(self.query_summary, is_query)
+        self.form.setRowVisible(self.edit_queries, is_query)
+        query_types = block.get("query_types", [])
+        self.query_summary.setText(
+            f"{len(query_types)} loại · " + ", ".join(
+                f"{item.get('name', 'Query')} ({item.get('weight', 0)}%)"
+                for item in query_types))
         self._loading = False
 
     def _store(self) -> None:
         row = self.blocks.currentRow()
         if self._loading or row < 0 or row >= len(self._schema):
             return
-        block = {"type": self._schema[row].get("type", "integer")}
+        old_block = self._schema[row]
+        block = {"type": old_block.get("type", "integer")}
+        for key in ("query_types", "duplicate_policy", "query_order",
+                    "one_query_per_line", "custom_order"):
+            if key in old_block:
+                block[key] = old_block[key]
         for key, widget in (("name", self.name), ("min", self.minimum),
                             ("max", self.maximum), ("length", self.length),
                             ("count", self.count), ("n", self.n_ref),
@@ -312,6 +351,17 @@ class SchemaBuilder(QWidget):
         item.setText(f"{row + 1:02d}. {block.get('name', '—')}  ·  "
                      f"{str(block['type']).replace('_', ' ').title()}")
         self.schema_changed.emit()
+
+    def _edit_query_schema(self) -> None:
+        row = self.blocks.currentRow()
+        if row < 0:
+            return
+        self._store()
+        dialog = QuerySchemaDialog(self._schema[row], self)
+        if dialog.exec() == QuerySchemaDialog.DialogCode.Accepted:
+            self._schema[row] = dialog.result_block()
+            self._select(row)
+            self.schema_changed.emit()
 
     def _clear_editor(self) -> None:
         self._loading = True
@@ -351,7 +401,8 @@ class SchemaBuilder(QWidget):
         if "tree" in kind:
             return ["Random Tree", "Path", "Star", "Balanced Binary Tree",
                     "Random Parent", "Broom", "Caterpillar"]
-        if kind in {"query_list", "interval_list"}:
+        if kind in {"query_list", "operation_list", "interval_list"}:
             return ["Random Range", "Single Point", "Whole Range", "Prefix", "Suffix",
-                    "Short Range", "Long Range", "Nested", "Overlapping", "Repeated Queries"]
+                    "Short Range", "Long Range", "Nested", "Overlapping", "Repeated",
+                    "Custom"]
         return ["Random"]
