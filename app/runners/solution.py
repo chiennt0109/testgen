@@ -20,6 +20,7 @@ class SolutionRunner:
         if result.returncode: raise RuntimeError(f"Compile Error:\n{result.stderr}")
         return output
     def run(self,program:Path,input_text:str,timeout:float=2.0,io_mode:str="stdio",input_name:str="input.txt",output_name:str="output.txt")->RunResult:
+        program = program.resolve()
         command=[sys.executable,str(program)] if program.suffix.lower()==".py" else [str(program)]
         try:
             with tempfile.TemporaryDirectory(prefix="tgs-run-") as raw:

@@ -33,7 +33,10 @@ class Project:
     seed: int = 123456
     time_limit: float = 2.0
     memory_limit_mb: int = 256
+    output_layout: str = "folders"
     io_mode: str = "stdio"
+    cpp_standard: str = "c++17"
+    compiler_path: str = ""
     duplicate_policy: str = "warn"
     schema: list[dict[str, Any]] = field(default_factory=list)
     test_plan: list[TestGroup] = field(default_factory=list)

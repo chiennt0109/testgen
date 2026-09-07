@@ -7,6 +7,7 @@ from app.core.pipeline import GenerationPipeline
 from app.exporters import export_zip
 from app.generators.blocks import array,graph,query_list,tree
 from app.models import Project
+from app.core.stress import normalize_output
 
 def test_constraint_engine():
     assert evaluate("n*(n-1)/2",{"n":5})==10
@@ -46,3 +47,6 @@ def test_duplicate_detection_and_folder_export(tmp_path:Path):
     manifest=json.loads((target/"manifest.json").read_text());assert manifest["tests"][1]["duplicate_of"]==1
     archive=export_zip(target,tmp_path/"X.zip")
     with zipfile.ZipFile(archive) as z: assert "X/test01/X.inp" in z.namelist()
+
+def test_output_normalization():
+    assert normalize_output("  1  2\n3\n") == "1 2 3"

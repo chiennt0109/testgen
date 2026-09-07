@@ -8,7 +8,7 @@ def validate_input(text:str, params:dict[str,Any], custom:Path|None=None)->tuple
     """Perform basic text checks and optionally call validator.py."""
     if not text.strip(): return False,"Input is empty"
     if "\x00" in text: return False,"Input contains NUL"
-    if custom and custom.exists():
+    if custom and custom.is_file():
         try:
             spec=importlib.util.spec_from_file_location("tgs_validator",custom); module=importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
             assert spec and spec.loader; spec.loader.exec_module(module); result=module.validate(text,params)

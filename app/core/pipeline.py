@@ -16,20 +16,28 @@ class GenerationPipeline:
         groups=[]
         for g in project.test_plan: groups.extend([{"name":g.name,"profile":g.profile,"overrides":g.overrides}]*g.count)
         while len(groups)<project.test_count:groups.append({"name":"Random","profile":"random","overrides":{}})
-        groups=groups[:project.test_count]; runner=SolutionRunner(); executable:Path|None=None
+        groups=groups[:project.test_count]; runner=SolutionRunner(project.compiler_path or None); executable:Path|None=None
         with tempfile.TemporaryDirectory(prefix="tgs-batch-") as raw:
             stage=Path(raw)/destination.name; stage.mkdir(); seen:dict[str,int]={}; manifest=[]
             solution=project_dir/project.solution_path
             if solution.exists():
                 executable=Path(raw)/("solution.exe" if solution.suffix==".cpp" else solution.name)
-                if solution.suffix==".cpp":runner.compile(solution,executable)
+                if solution.suffix==".cpp":runner.compile(solution,executable,project.cpp_standard)
                 else:executable=solution
             for i,group in enumerate(groups,1):
                 if cancel and cancel():raise RuntimeError("Generation cancelled")
-                seed=project.seed+i; text,_=self.engine.generate(project,seed,index=i,group=group,base=project_dir)
-                valid,message=validate_input(text,project.to_dict(),project_dir/project.validator_path)
-                if not valid:raise RuntimeError(f"Validator Error at test{i:02d}: {message}")
-                digest=hashlib.sha256(text.encode()).hexdigest(); duplicate=seen.get(digest)
+                seed=project.seed+i
+                custom_validator = project_dir / project.validator_path if project.validator_path else None
+                for retry in range(101):
+                    text,_=self.engine.generate(project,seed,index=i,group=group,base=project_dir)
+                    valid,message=validate_input(text,project.to_dict(),custom_validator)
+                    if not valid:raise RuntimeError(f"Validator Error at test{i:02d}: {message}")
+                    digest=hashlib.sha256(text.encode()).hexdigest(); duplicate=seen.get(digest)
+                    if not duplicate or project.duplicate_policy != "regenerate":
+                        break
+                    seed = project.seed + i + (retry + 1) * project.test_count
+                else:
+                    raise RuntimeError(f"Duplicate Input: could not regenerate test{i:02d} uniquely")
                 if duplicate and project.duplicate_policy=="fail":raise RuntimeError(f"Duplicate Input: test{i:02d} duplicates test{duplicate:02d}")
                 seen.setdefault(digest,i); folder=project.test_folder_pattern.format(index=i); test_dir=stage/folder; test_dir.mkdir()
                 (test_dir/project.input_filename).write_text(text,encoding="utf-8")
