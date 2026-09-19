@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import copy
 from typing import Any
 
 from app.models import Project
@@ -69,6 +70,64 @@ def audit_plan(project: Project) -> PlanAudit:
                         f"test{index:02d}: group {group_name!r} và "
                         f"{subtask.get('name', 'Subtask')!r} xung đột tại {variable}: {conflict}.")
     return audit
+
+
+def generation_group(project: Project, test_index: int) -> dict[str, Any]:
+    """Return the group with Test Plan and Subtask constraints intersected.
+
+    Test Plan selects how a test is generated. Subtasks additionally restrict
+    that test; they are therefore generation inputs as well as post-generation
+    assertions.
+    """
+
+    if test_index < 1 or test_index > project.test_count:
+        raise ValueError(f"Test index {test_index} is outside 1-{project.test_count}")
+    position = 0
+    selected_name = "Random"
+    selected_profile = "random"
+    overrides: dict[str, Any] = {}
+    for group in project.test_plan:
+        next_position = position + max(0, group.count)
+        if position < test_index <= next_position:
+            selected_name = group.name
+            selected_profile = group.profile
+            overrides = copy.deepcopy(group.overrides)
+            break
+        position = next_position
+
+    subtask_names: list[str] = []
+    for subtask in project.subtasks:
+        try:
+            applies = int(subtask.get("start", 1)) <= test_index <= int(subtask.get("end", 1))
+        except (TypeError, ValueError):
+            continue
+        if not applies:
+            continue
+        subtask_names.append(str(subtask.get("name", "Subtask")))
+        for variable, restriction in subtask.get("constraints", {}).items():
+            if isinstance(restriction, dict):
+                overrides[variable] = _intersect_rules(
+                    overrides.get(variable, {}), restriction)
+    return {
+        "name": selected_name,
+        "profile": selected_profile,
+        "overrides": overrides,
+        "subtasks": subtask_names,
+    }
+
+
+def _intersect_rules(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(first)
+    for key, value in second.items():
+        if key == "min" and isinstance(value, (int, float)) and isinstance(result.get(key), (int, float)):
+            result[key] = max(result[key], value)
+        elif key == "max" and isinstance(value, (int, float)) and isinstance(result.get(key), (int, float)):
+            result[key] = min(result[key], value)
+        else:
+            # Non-literal expressions are still enforced by the final validator.
+            # Prefer the subtask restriction because it applies to this exact test.
+            result[key] = copy.deepcopy(value)
+    return result
 
 
 def _literal_bound_conflict(first: dict[str, Any], second: dict[str, Any]) -> str:

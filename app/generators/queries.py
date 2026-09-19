@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+import copy
 from typing import Any
 
 from app.core.constraints import ConstraintError, bounds, evaluate
@@ -20,7 +21,7 @@ def generate_queries(
     count = int(evaluate(spec.get("count", 1), context))
     if count < 0:
         raise ConstraintError("Query count cannot be negative")
-    query_types = _normalized_types(spec)
+    query_types = _apply_list_bounds(_normalized_types(spec), spec)
     if not query_types:
         raise ConstraintError("Query List requires at least one query type")
     weights = [float(item.get("weight", 1)) for item in query_types]
@@ -203,6 +204,38 @@ def _normalized_types(spec: dict[str, Any]) -> list[dict[str, Any]]:
         fields.append({"name": "x", "type": "integer",
                        "min": spec.get("min", 0), "max": spec.get("max", 100)})
     return [{"name": "Range Query", "weight": 100, "fields": fields}]
+
+
+def _apply_list_bounds(
+    query_types: list[dict[str, Any]], spec: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Intersect block-level bounds with every numeric query field.
+
+    This makes Test Plan/Subtask overrides on a Query List block meaningful while
+    retaining field dependencies such as ``r.min = l``.
+    """
+
+    result = copy.deepcopy(query_types)
+    list_min, list_max = spec.get("min"), spec.get("max")
+    if list_min is None and list_max is None:
+        return result
+    for query_type in result:
+        for field in query_type.get("fields", []):
+            if _slug(field.get("type", "integer")) not in {"integer", "long_long", "real"}:
+                continue
+            if list_min is not None:
+                field["min"] = _combined_expression("max", field.get("min"), list_min)
+            if list_max is not None:
+                field["max"] = _combined_expression("min", field.get("max"), list_max)
+    return result
+
+
+def _combined_expression(function: str, first: Any, second: Any) -> Any:
+    if first is None:
+        return second
+    if isinstance(first, (int, float)) and isinstance(second, (int, float)):
+        return max(first, second) if function == "max" else min(first, second)
+    return f"{function}(({first}),({second}))"
 
 
 def _literal(value: Any) -> Any:

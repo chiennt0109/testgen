@@ -35,8 +35,9 @@ Với Query List, bấm **Chỉnh cấu trúc query…**, tạo query type và f
 range query gồm `l: 1..n`, `r: l..n`; chọn **Mỗi query một dòng**. Với operation
 trộn, dùng prefix `1`/`2` và weight tương ứng.
 
-Sau mỗi thay đổi, bấm **Generate Preview**. Kiểm tra input, seed và kết quả
-validation. Có thể Regenerate, Copy hoặc Save This Test.
+Sau mỗi thay đổi, chọn **Test #** cạnh Preview rồi bấm **Generate Preview**. Preview
+dùng đúng group Test Plan và mọi Subtask chứa test đó; dòng trạng thái hiển thị
+Group/Subtasks đã áp dụng. Có thể Regenerate, Copy hoặc Save This Test.
 
 ## 4. Lập Test Plan
 
@@ -66,9 +67,11 @@ Tại **Subtasks**:
 2. Chọn dòng và bấm **Chỉnh constraints…**.
 3. Chọn biến rồi nhập giới hạn giống Test Plan.
 
-Khác với Test Plan, Subtask không thay đổi generator. Nó kiểm tra lại giá trị đã
-sinh. Nếu test 01–05 có `n.max = 100` nhưng generator sinh `n=101`, Generate All
-dừng với `Subtask Constraint Error` và không publish batch dở dang.
+Test Plan chọn profile và constraint ban đầu. Với mỗi test, app lấy mọi Subtask
+chứa test đó rồi **giao constraint của Subtask với Test Plan trước khi sinh**. Ví
+dụ group cho `n=1..1000`, Subtask cho `n<=100` thì generator dùng `n=1..100` ngay
+từ đầu. Sau khi sinh, app vẫn validate lần thứ hai để bảo vệ custom generator hoặc
+pattern không tuân thủ constraint.
 
 ## 6. Cấu hình solution và validator
 
@@ -155,6 +158,9 @@ Khi Generate All gặp Runtime Error, app lưu input gây lỗi, `stdout.txt`,
 `stderr.txt` và `run.json` tại `generation_failures/testXX[_VNN]/`. Nếu solution
 dùng `freopen` nhưng trang Solution đang chọn STDIN/STDOUT, chuyển sang **File I/O**
 và đảm bảo tên trong `freopen` khớp chính xác Input/Output filename ở General.
+Exit code Windows `3221225781` (`0xC0000135`) nghĩa là thiếu DLL runtime. App hiện
+liên kết tĩnh MinGW runtime khi compile trên Windows; hãy Generate All/Build Output
+lại, hoặc thêm thư mục `bin` của MinGW vào `PATH` nếu đang chạy executable cũ.
 
 Nếu task nền đã kết thúc, có thể chạy Generate/Stress/Analyze tiếp theo ngay. Nếu
 đang chạy, app báo **Một tác vụ nền đang chạy** thay vì tạo thêm thread song song.

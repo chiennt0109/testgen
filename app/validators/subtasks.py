@@ -49,6 +49,9 @@ def _validate_value(
         comparable = [value]
     elif isinstance(value, list) and all(isinstance(item, (int, float)) for item in value):
         comparable = value
+    elif isinstance(value, list) and all(isinstance(item, tuple) for item in value):
+        comparable = [number for row in value for number in row
+                      if isinstance(number, (int, float))]
     else:
         comparable = []
     try:

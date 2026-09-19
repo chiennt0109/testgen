@@ -34,7 +34,13 @@ def evaluate(value: Any, context: dict[str, Any]) -> int | float:
             return _OPS[type(item.op)](visit(item.left), visit(item.right))
         if isinstance(item, ast.UnaryOp) and type(item.op) in _OPS:
             return _OPS[type(item.op)](visit(item.operand))
-        raise ConstraintError("Only numbers, variables and + - * / // % ** are allowed")
+        if (isinstance(item, ast.Call) and isinstance(item.func, ast.Name) and
+                item.func.id in {"min", "max"} and len(item.args) >= 1 and
+                not item.keywords):
+            values = [visit(argument) for argument in item.args]
+            return min(values) if item.func.id == "min" else max(values)
+        raise ConstraintError(
+            "Only numbers, variables, min/max and + - * / // % ** are allowed")
 
     try:
         result = visit(node)

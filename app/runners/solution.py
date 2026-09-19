@@ -1,6 +1,7 @@
 """Compile and execute C++, Python, or native solutions."""
 from __future__ import annotations
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shutil, subprocess, sys, tempfile
 
@@ -16,9 +17,18 @@ class SolutionRunner:
         result=subprocess.run([self.gpp,"--version"],capture_output=True,text=True,encoding="utf-8",errors="replace"); return result.returncode==0,result.stdout.splitlines()[0]
     def compile(self,source:Path,output:Path,standard:str="c++17")->Path:
         if not self.gpp: raise RuntimeError("Compile Error: g++ not found")
-        result=subprocess.run([self.gpp,str(source),f"-std={standard}","-O2","-pipe","-o",str(output)],capture_output=True,text=True,encoding="utf-8",errors="replace")
+        command=self.compile_command(source,output,standard,windows=os.name=="nt")
+        result=subprocess.run(command,capture_output=True,text=True,encoding="utf-8",errors="replace")
         if result.returncode: raise RuntimeError(f"Compile Error:\n{result.stderr}")
         return output
+    def compile_command(self,source:Path,output:Path,standard:str="c++17",*,windows:bool|None=None)->list[str]:
+        """Build a compiler command, statically linking MinGW runtime on Windows."""
+        if not self.gpp: raise RuntimeError("Compile Error: g++ not found")
+        is_windows=os.name=="nt" if windows is None else windows
+        command=[self.gpp,str(source),f"-std={standard}","-O2","-pipe"]
+        if is_windows: command.extend(["-static","-static-libgcc","-static-libstdc++"])
+        command.extend(["-o",str(output)])
+        return command
     def run(self,program:Path,input_text:str,timeout:float=2.0,io_mode:str="stdio",input_name:str="input.txt",output_name:str="output.txt")->RunResult:
         program = program.resolve()
         command=[sys.executable,str(program)] if program.suffix.lower()==".py" else [str(program)]

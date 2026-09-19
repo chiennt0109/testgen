@@ -14,7 +14,7 @@ from app.runners import RunResult, SolutionRunner
 from app.validators import validate_input, validate_subtasks
 
 from .engine import GenerationEngine
-from .planning import audit_plan
+from .planning import audit_plan, generation_group
 
 
 class GenerationPipeline:
@@ -35,7 +35,8 @@ class GenerationPipeline:
         audit = audit_plan(project)
         if audit.errors:
             raise RuntimeError("Test Plan / Subtask Error:\n- " + "\n- ".join(audit.errors))
-        groups = self._expanded_groups(project)
+        groups = [generation_group(project, index)
+                  for index in range(1, project.test_count + 1)]
         runner = SolutionRunner(project.compiler_path or None)
 
         with tempfile.TemporaryDirectory(prefix="tgs-batch-") as raw:
@@ -86,6 +87,7 @@ class GenerationPipeline:
                 manifest.append({
                     "id": f"{index:02d}", "folder": folder, "seed": seed,
                     "group": group["name"], "input_sha256": digest,
+                    "subtasks": group.get("subtasks", []),
                     "duplicate_of": duplicate,
                 })
                 if progress:
@@ -136,19 +138,6 @@ class GenerationPipeline:
             return target
 
     @staticmethod
-    def _expanded_groups(project: Project) -> list[dict[str, object]]:
-        groups: list[dict[str, object]] = []
-        for group in project.test_plan:
-            groups.extend([{
-                "name": group.name,
-                "profile": group.profile,
-                "overrides": group.overrides,
-            }] * max(0, group.count))
-        while len(groups) < project.test_count:
-            groups.append({"name": "Random", "profile": "random", "overrides": {}})
-        return groups[:project.test_count]
-
-    @staticmethod
     def _should_build_outputs(project: Project, project_dir: Path) -> bool:
         return bool(
             project.generate_outputs and project.solution_path and
@@ -184,6 +173,10 @@ class GenerationPipeline:
     def run_hint(project: Project, result: RunResult) -> str:
         if result.status == "TIMEOUT":
             return "Gợi ý: kiểm tra vòng lặp vô hạn hoặc tăng Time limit trong General."
+        if result.returncode in {3221225781, -1073741515}:
+            return (
+                "Windows báo thiếu DLL (0xC0000135). Hãy compile lại bằng phiên bản app "
+                "mới để liên kết tĩnh MinGW runtime, hoặc thêm thư mục bin của MinGW vào PATH.")
         if project.io_mode == "stdio":
             return (
                 "Gợi ý: nếu solution dùng freopen, chọn File I/O tại trang Solution; "

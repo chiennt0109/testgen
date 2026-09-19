@@ -38,11 +38,14 @@ from PySide6.QtWidgets import (
 )
 
 from app.analyzers import analyze
-from app.core import GenerationEngine, GenerationPipeline, StressTester, audit_plan
+from app.core import (
+    GenerationEngine, GenerationPipeline, StressTester, audit_plan,
+    generation_group,
+)
 from app.exporters import export_zip
 from app.models import Project, TestGroup
 from app.runners import SolutionRunner
-from app.validators import validate_input
+from app.validators import validate_input, validate_subtasks
 
 from .schema_builder import SchemaBuilder
 from .constraint_editor import ConstraintEditorDialog, summarize_constraints
@@ -220,6 +223,10 @@ class MainWindow(QMainWindow):
         preview_group = QGroupBox("Generate Preview")
         preview_layout = QVBoxLayout(preview_group)
         preview_buttons = QHBoxLayout()
+        preview_buttons.addWidget(QLabel("Test #"))
+        self.preview_test_index = QSpinBox()
+        self.preview_test_index.setRange(1, self.project.test_count)
+        preview_buttons.addWidget(self.preview_test_index)
         for label, callback in (("Sinh thử", self.generate_preview),
                                 ("Regenerate", self.regenerate_preview),
                                 ("Copy", self.copy_preview),
@@ -447,6 +454,7 @@ class MainWindow(QMainWindow):
         self.project.input_filename = self.input_filename.text().strip() or f"{self.project.problem_name}.inp"
         self.project.output_filename = self.output_filename.text().strip() or f"{self.project.problem_name}.out"
         self.project.test_count = self.test_count.value()
+        self.preview_test_index.setMaximum(self.project.test_count)
         prefix = self.folder_prefix.text().strip() or "test"
         self.project.test_folder_pattern = prefix + "{index:0" + str(self.folder_digits.value()) + "d}"
         try:
@@ -474,6 +482,7 @@ class MainWindow(QMainWindow):
         self.input_filename.setText(self.project.input_filename)
         self.output_filename.setText(self.project.output_filename)
         self.test_count.setValue(self.project.test_count)
+        self.preview_test_index.setMaximum(self.project.test_count)
         pattern = self.project.test_folder_pattern
         self.folder_prefix.setText(pattern.split("{")[0] or "test")
         digits = 2
@@ -551,15 +560,22 @@ class MainWindow(QMainWindow):
     def _generate_preview_with_seed_offset(self, offset: int) -> None:
         try:
             self._sync_project()
-            seed = self.project.seed + offset
-            text, _ = GenerationEngine().generate(
-                self.project, seed, index=offset, base=self._project_dir())
+            test_index = self.preview_test_index.value()
+            seed = self.project.seed + test_index + offset - 1
+            group = generation_group(self.project, test_index)
+            text, context = GenerationEngine().generate(
+                self.project, seed, index=test_index, group=group,
+                base=self._project_dir())
             valid, reason = validate_input(text, self.project.to_dict(), self._validator_file())
+            if valid:
+                valid, reason = validate_subtasks(
+                    test_index, context, self.project.subtasks)
             self.preview_text = text
             self.preview.setPlainText(text)
             self.preview_meta.setProperty("offset", offset)
             self.preview_meta.setText(
-                f"Seed: {seed}  ·  Group: Preview  ·  "
+                f"Seed: {seed}  ·  Group: {group['name']}  ·  "
+                f"Subtasks: {', '.join(group['subtasks']) or '—'}  ·  "
                 f"Validation: {'OK' if valid else reason}")
             self.nav.setCurrentRow(1)
         except Exception as exc:

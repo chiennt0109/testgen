@@ -9,11 +9,13 @@ from app.generators.blocks import array,graph,query_list,tree
 from app.generators.queries import generate_queries
 from app.models import Project, TestGroup as PlanGroup
 from app.core.stress import StressTester, normalize_output
-from app.core.planning import audit_plan
+from app.core.planning import audit_plan, generation_group
+from app.runners import SolutionRunner
 from app.validators import validate_subtasks
 
 def test_constraint_engine():
     assert evaluate("n*(n-1)/2",{"n":5})==10
+    assert evaluate("min(n, 3) + max(2, 5)", {"n": 10}) == 8
     with pytest.raises(ConstraintError):evaluate("__import__('os')",{})
 
 @pytest.mark.parametrize("pattern",["random","all_equal","strict_increasing","decreasing","many_duplicates","binary","mountain"])
@@ -150,7 +152,7 @@ def test_pipeline_rejects_test_outside_subtask_constraint(tmp_path:Path):
         subtasks=[{"name": "n <= 10", "start": 1, "end": 1,
                   "constraints": {"n": {"max": 10}}}],
     )
-    with pytest.raises(RuntimeError, match="Subtask Constraint Error"):
+    with pytest.raises((RuntimeError, ConstraintError)):
         GenerationPipeline().generate(project, tmp_path, tmp_path / "generated" / "SUBTASK")
 
 def test_stress_tester_uses_profile_and_runs_repeatedly(tmp_path:Path):
@@ -213,3 +215,55 @@ def test_generate_inputs_can_skip_broken_solution(tmp_path:Path):
         project, tmp_path, tmp_path / "generated" / "INPUT_ONLY")
     assert (target / "test01" / "INPUT_ONLY.inp").read_text().strip() == "3"
     assert not (target / "test01" / "INPUT_ONLY.out").exists()
+
+def test_subtask_constraints_restrict_generation_not_only_validation(tmp_path:Path):
+    project = Project(
+        problem_name="PLANNED", input_filename="PLANNED.inp",
+        generate_outputs=False, test_count=4,
+        schema=[{"type": "integer", "name": "n", "min": 1, "max": 100}],
+        test_plan=[PlanGroup("Small", 2, "small", "increment",
+                             {"n": {"min": 1, "max": 20}}),
+                   PlanGroup("Large", 2, "large", "increment",
+                             {"n": {"min": 50, "max": 100}})],
+        subtasks=[
+            {"name": "Sub 1", "start": 1, "end": 2,
+             "constraints": {"n": {"max": 5}}},
+            {"name": "Sub 2", "start": 3, "end": 4,
+             "constraints": {"n": {"min": 80}}},
+        ],
+    )
+    assert generation_group(project, 1)["overrides"]["n"] == {"min": 1, "max": 5}
+    assert generation_group(project, 3)["overrides"]["n"] == {"min": 80, "max": 100}
+    target = GenerationPipeline().generate(
+        project, tmp_path, tmp_path / "generated" / "PLANNED")
+    values = [int((target / f"test{i:02d}" / "PLANNED.inp").read_text())
+              for i in range(1, 5)]
+    assert all(1 <= value <= 5 for value in values[:2])
+    assert all(80 <= value <= 100 for value in values[2:])
+    manifest = json.loads((target / "manifest.json").read_text())
+    assert manifest["tests"][0]["group"] == "Small"
+    assert manifest["tests"][0]["subtasks"] == ["Sub 1"]
+
+def test_windows_compile_command_static_links_mingw_runtime():
+    command = SolutionRunner("g++").compile_command(
+        Path("solution.cpp"), Path("solution.exe"), windows=True)
+    assert "-static" in command
+    assert "-static-libgcc" in command
+    assert "-static-libstdc++" in command
+
+def test_windows_missing_dll_runtime_hint():
+    from app.runners import RunResult
+    hint = GenerationPipeline.run_hint(
+        Project(), RunResult("RUNTIME ERROR", returncode=3221225781))
+    assert "0xC0000135" in hint and "DLL" in hint
+
+def test_subtask_bounds_on_query_list_restrict_query_fields():
+    spec = {
+        "count": 30, "min": 3, "max": 7, "pattern": "random_range",
+        "query_types": [{"name": "Range", "weight": 100, "fields": [
+            {"name": "l", "type": "integer", "min": 1, "max": "n"},
+            {"name": "r", "type": "integer", "min": "l", "max": "n"},
+        ]}],
+    }
+    rows = generate_queries(spec, {"n": 100}, random.Random(91))
+    assert all(3 <= left <= right <= 7 for left, right in rows)
