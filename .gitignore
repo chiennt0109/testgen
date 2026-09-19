@@ -9,3 +9,4 @@ logs/
 generated/
 counterexamples/
 .tgs-build/
+generation_failures/

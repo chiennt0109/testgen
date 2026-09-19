@@ -52,6 +52,12 @@ Ví dụ nhóm Small đặt `n.max = 100`; nhóm Max đặt `n.exact = 100000`. 
 test trong các group nên bằng Test count. Nếu thiếu, app bổ sung nhóm Random; nếu
 thừa, danh sách được cắt theo Test count.
 
+**Number of tests là số test liên tiếp của group, không phải số thứ tự group.**
+Nếu Subtask 1 là test 01–06, Subtask 2 là 07–13 và Subtask 3 là 14–20 thì ba
+group tương ứng thường phải có Number of tests là `6`, `7`, `7` — không phải
+`1`, `1`, `1`. Nếu nhập `1`, `1`, `1`, chỉ test01–03 dùng ba group đó và test04–20
+sẽ được bổ sung bằng Random.
+
 ## 5. Khai báo Subtasks
 
 Tại **Subtasks**:
@@ -72,6 +78,9 @@ Tại **Solution**:
 2. Chọn **STDIN / STDOUT** hoặc **File I/O (freopen)**.
 3. Chọn `g++` nếu app không tìm thấy và bấm **Test Compiler**.
 4. Chọn `brute.cpp`/`.py` nếu muốn Cross Check.
+5. Bật **Sinh file .out trong Generate All** khi solution đã chạy đúng. Nếu đang
+   thiết kế input hoặc solution còn lỗi, bỏ chọn mục này để sinh riêng `.inp`, sau
+   đó sửa solution và dùng **Build Output**.
 
 Tại **Validator**, có thể chọn `validator.py` với API:
 
@@ -93,6 +102,11 @@ Bấm **Validate** để kiểm tra preview hoặc batch hiện có.
 Pipeline tạo thư mục tạm, generate, validate, kiểm tra subtask/duplicate, chạy
 solution và chỉ publish khi toàn bộ thành công. Nếu output đã tồn tại, app tạo
 `_V02`, `_V03`,… thay vì ghi đè.
+
+Trước khi chạy, app kiểm tra tổng Number of tests và giao giữa constraint của Test
+Plan/Subtask. Ví dụ group đặt `n.min=2000` nhưng subtask chứa test đó đặt
+`n.max=1999` sẽ bị chặn và chỉ rõ test/group bị xung đột. Nếu tổng group khác Test
+count, app cảnh báo rằng phần thiếu sẽ dùng Random hoặc phần dư sẽ bị cắt.
 
 Kết quả:
 
@@ -136,6 +150,11 @@ ZIP chỉ chứa bộ test/manifest, không chứa cache hoặc thư mục tạm
 | `Subtask Constraint Error` | Sửa Test Plan override hoặc constraint/range của Subtask. |
 | `Duplicate Input` | Đổi policy hoặc tăng miền dữ liệu/seed profile. |
 | Stress lưu counterexample | Mở ba file trong `counterexamples/seed_*` để debug. |
+
+Khi Generate All gặp Runtime Error, app lưu input gây lỗi, `stdout.txt`,
+`stderr.txt` và `run.json` tại `generation_failures/testXX[_VNN]/`. Nếu solution
+dùng `freopen` nhưng trang Solution đang chọn STDIN/STDOUT, chuyển sang **File I/O**
+và đảm bảo tên trong `freopen` khớp chính xác Input/Output filename ở General.
 
 Nếu task nền đã kết thúc, có thể chạy Generate/Stress/Analyze tiếp theo ngay. Nếu
 đang chạy, app báo **Một tác vụ nền đang chạy** thay vì tạo thêm thread song song.

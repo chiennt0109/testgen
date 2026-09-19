@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.analyzers import analyze
-from app.core import GenerationEngine, GenerationPipeline, StressTester
+from app.core import GenerationEngine, GenerationPipeline, StressTester, audit_plan
 from app.exporters import export_zip
 from app.models import Project, TestGroup
 from app.runners import SolutionRunner
@@ -310,6 +310,8 @@ class MainWindow(QMainWindow):
         self.io_mode.addItem("File I/O (freopen)", "file")
         self.compiler_path = QLineEdit()
         self.compiler_status = QLabel("Chưa kiểm tra")
+        self.generate_outputs = QCheckBox("Sinh file .out trong Generate All")
+        self.generate_outputs.setChecked(True)
         form.addRow("Solution", self._path_picker(self.solution_path, "Chọn solution"))
         form.addRow("Brute", self._path_picker(self.brute_path, "Chọn brute"))
         form.addRow("Language", self.language)
@@ -317,6 +319,7 @@ class MainWindow(QMainWindow):
         form.addRow("I/O mode", self.io_mode)
         form.addRow("g++ path", self._path_picker(self.compiler_path, "Chọn g++"))
         form.addRow("Compiler status", self.compiler_status)
+        form.addRow("", self.generate_outputs)
         layout.addLayout(form)
         test = QPushButton("Test Compiler")
         test.clicked.connect(self.test_compiler)
@@ -464,6 +467,7 @@ class MainWindow(QMainWindow):
         self.project.io_mode = str(self.io_mode.currentData())
         self.project.cpp_standard = self.cpp_standard.currentText()
         self.project.compiler_path = self.compiler_path.text().strip()
+        self.project.generate_outputs = self.generate_outputs.isChecked()
 
     def _apply_project(self) -> None:
         self.name.setText(self.project.problem_name)
@@ -492,6 +496,7 @@ class MainWindow(QMainWindow):
         self.language.setCurrentText(self.project.language)
         self.cpp_standard.setCurrentText(self.project.cpp_standard)
         self.compiler_path.setText(self.project.compiler_path)
+        self.generate_outputs.setChecked(self.project.generate_outputs)
         io_index = self.io_mode.findData(self.project.io_mode)
         self.io_mode.setCurrentIndex(max(0, io_index))
         self._fill_test_plan()
@@ -578,6 +583,21 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Configuration Error", str(exc))
             return
+        audit = audit_plan(self.project)
+        if audit.errors:
+            self._show_error(
+                "Test Plan / Subtask Error",
+                "Cấu hình Test Plan và Subtasks đang xung đột.",
+                "\n".join(f"• {message}" for message in audit.errors))
+            return
+        if audit.warnings:
+            answer = QMessageBox.warning(
+                self, "Test Plan Warning",
+                "\n".join(audit.warnings) + "\n\nBạn vẫn muốn Generate All?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         destination = self._project_dir() / "generated" / self.project.problem_name
 
         def task(progress: Callable[[int, int], None]) -> Path:
@@ -632,7 +652,15 @@ class MainWindow(QMainWindow):
                                         self.project.time_limit, self.project.io_mode,
                                         self.project.input_filename, self.project.output_filename)
                     if result.status != "OK":
-                        raise RuntimeError(f"{input_path.parent.name}: {result.status}\n{result.stderr}")
+                        failure = GenerationPipeline.save_run_failure(
+                            self._project_dir(), index,
+                            input_path.read_text(encoding="utf-8"), result, self.project)
+                        raise RuntimeError(
+                            f"{input_path.parent.name}: {result.status} "
+                            f"(exit code: {result.returncode})\n"
+                            f"{GenerationPipeline.run_hint(self.project, result)}\n"
+                            f"Chi tiết đã lưu tại: {failure}\n"
+                            f"stderr:\n{result.stderr or '(trống)' }")
                     (input_path.parent / self.project.output_filename).write_text(result.stdout, encoding="utf-8")
                     progress(index, len(inputs))
                 return folder
@@ -748,8 +776,23 @@ class MainWindow(QMainWindow):
         self.task_status.setText(f"Đang xử lý {current}/{total}")
 
     def _task_failed(self, message: str) -> None:
-        QMessageBox.critical(self, "Task Error", message)
+        lines = message.splitlines()
+        summary = lines[0] if lines else "Tác vụ thất bại"
+        details = "\n".join(lines[1:])
+        self._show_error("Task Error", summary, details)
         self.task_status.setText("Tác vụ thất bại")
+
+    def _show_error(self, title: str, summary: str, details: str = "") -> None:
+        """Show a readable summary while preserving complete diagnostics."""
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Critical)
+        dialog.setWindowTitle(title)
+        dialog.setText(summary)
+        if details:
+            dialog.setInformativeText("Mở Show Details để xem nguyên nhân và đường dẫn file chẩn đoán.")
+            dialog.setDetailedText(details)
+        dialog.exec()
 
     def _release_task(self) -> None:
         """Release Python references before Qt deletes the native objects."""

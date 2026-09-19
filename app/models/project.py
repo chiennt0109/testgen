@@ -38,6 +38,7 @@ class Project:
     cpp_standard: str = "c++17"
     compiler_path: str = ""
     duplicate_policy: str = "warn"
+    generate_outputs: bool = True
     schema: list[dict[str, Any]] = field(default_factory=list)
     test_plan: list[TestGroup] = field(default_factory=list)
     subtasks: list[dict[str, Any]] = field(default_factory=list)

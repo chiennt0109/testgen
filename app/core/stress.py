@@ -8,7 +8,7 @@ import time
 from typing import Callable
 
 from app.models import Project
-from app.runners import SolutionRunner
+from app.runners import RunResult, SolutionRunner
 
 from .engine import GenerationEngine
 
@@ -83,8 +83,7 @@ class StressTester:
                 if (expected.status != "OK" or actual.status != "OK" or
                         normalize_output(expected.stdout) != normalize_output(actual.stdout)):
                     counterexample = self._save_counterexample(
-                        project_dir, last_seed, input_text, expected.stdout, actual.stdout,
-                        expected.status, actual.status,
+                        project_dir, last_seed, input_text, expected, actual,
                     )
                     return StressResult(
                         iteration - 1, 1, time.monotonic() - started,
@@ -127,14 +126,18 @@ class StressTester:
 
     @staticmethod
     def _save_counterexample(
-        project_dir: Path, seed: int, input_text: str, brute_output: str,
-        solution_output: str, brute_status: str, solution_status: str,
+        project_dir: Path, seed: int, input_text: str,
+        brute_result: RunResult, solution_result: RunResult,
     ) -> Path:
         target = project_dir / "counterexamples" / f"seed_{seed}"
         target.mkdir(parents=True, exist_ok=True)
         (target / "input.txt").write_text(input_text, encoding="utf-8")
         (target / "brute.out").write_text(
-            f"status: {brute_status}\n{brute_output}", encoding="utf-8")
+            f"status: {brute_result.status}\n{brute_result.stdout}", encoding="utf-8")
         (target / "solution.out").write_text(
-            f"status: {solution_status}\n{solution_output}", encoding="utf-8")
+            f"status: {solution_result.status}\n{solution_result.stdout}", encoding="utf-8")
+        (target / "brute.stderr.txt").write_text(
+            brute_result.stderr, encoding="utf-8")
+        (target / "solution.stderr.txt").write_text(
+            solution_result.stderr, encoding="utf-8")
         return target

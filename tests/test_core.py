@@ -9,6 +9,7 @@ from app.generators.blocks import array,graph,query_list,tree
 from app.generators.queries import generate_queries
 from app.models import Project, TestGroup as PlanGroup
 from app.core.stress import StressTester, normalize_output
+from app.core.planning import audit_plan
 from app.validators import validate_subtasks
 
 def test_constraint_engine():
@@ -170,3 +171,45 @@ def test_stress_tester_uses_profile_and_runs_repeatedly(tmp_path:Path):
     assert result.passed == 3 and result.failed == 0
     assert [item[0] for item in progress] == [1, 2, 3]
     assert not (tmp_path / ".tgs-build").exists()
+
+def test_plan_audit_finds_count_mismatch_and_group_subtask_conflict():
+    project = Project(
+        test_count=20,
+        test_plan=[
+            PlanGroup("sub1", 1, "small", "increment", {"n": {"min": 1, "max": 1999}}),
+            PlanGroup("sub2", 1, "large", "increment", {"n": {"min": 2000, "max": 100000}}),
+        ],
+        subtasks=[{"name": "Subtask 1", "start": 1, "end": 6,
+                  "constraints": {"n": {"min": 1, "max": 1999}}}],
+    )
+    audit = audit_plan(project)
+    assert any("Test Plan có 2 test" in warning for warning in audit.warnings)
+    assert any("test02" in error and "xung đột" in error for error in audit.errors)
+
+def test_pipeline_saves_runtime_error_diagnostics(tmp_path:Path):
+    (tmp_path / "bad.py").write_text(
+        "import sys\nsys.stderr.write('boom\\n')\nraise SystemExit(7)\n", encoding="utf-8")
+    project = Project(
+        problem_name="BAD", input_filename="BAD.inp", output_filename="BAD.out",
+        solution_path="bad.py", test_count=1,
+        schema=[{"type": "integer", "name": "n", "min": 1, "max": 1}],
+    )
+    with pytest.raises(RuntimeError, match="exit code: 7"):
+        GenerationPipeline().generate(project, tmp_path, tmp_path / "generated" / "BAD")
+    failure = tmp_path / "generation_failures" / "test01"
+    assert (failure / "BAD.inp").read_text(encoding="utf-8").strip() == "1"
+    assert "boom" in (failure / "stderr.txt").read_text(encoding="utf-8")
+    assert json.loads((failure / "run.json").read_text(encoding="utf-8"))["returncode"] == 7
+
+def test_generate_inputs_can_skip_broken_solution(tmp_path:Path):
+    (tmp_path / "bad.py").write_text("raise SystemExit(9)\n", encoding="utf-8")
+    project = Project(
+        problem_name="INPUT_ONLY", input_filename="INPUT_ONLY.inp",
+        output_filename="INPUT_ONLY.out", solution_path="bad.py",
+        generate_outputs=False, test_count=1,
+        schema=[{"type": "integer", "name": "n", "min": 3, "max": 3}],
+    )
+    target = GenerationPipeline().generate(
+        project, tmp_path, tmp_path / "generated" / "INPUT_ONLY")
+    assert (target / "test01" / "INPUT_ONLY.inp").read_text().strip() == "3"
+    assert not (target / "test01" / "INPUT_ONLY.out").exists()
