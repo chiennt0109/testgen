@@ -4,6 +4,8 @@
 
 Hướng dẫn thao tác đầy đủ: [Hướng dẫn sinh test](docs/huong-dan-sinh-test.md).
 
+Demo adversarial/mutation: [Frequency, Range Sum, Graph/Tree](examples/ADVERSARIAL_DEMOS.md).
+
 ## Cài môi trường phát triển
 
 Yêu cầu Python 3.12+, và `g++` trong `PATH` nếu chạy lời giải C++.

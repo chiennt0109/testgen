@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["GenerationEngine", "GenerationPipeline", "PlanAudit", "StressResult", "StressTester", "audit_plan", "generation_group"]
+__all__ = ["Candidate", "GenerationEngine", "GenerationPipeline", "MutationReport", "MutationTester", "PlanAudit", "StressResult", "StressTester", "TargetedCase", "audit_plan", "generation_group"]
 
 
 def __getattr__(name: str) -> Any:
@@ -22,4 +22,8 @@ def __getattr__(name: str) -> Any:
     if name in {"StressResult", "StressTester"}:
         from .stress import StressResult, StressTester
         return {"StressResult": StressResult, "StressTester": StressTester}[name]
+    if name in {"Candidate", "MutationReport", "MutationTester", "TargetedCase"}:
+        from .mutation import Candidate, MutationReport, MutationTester, TargetedCase
+        return {"Candidate": Candidate, "MutationReport": MutationReport,
+                "MutationTester": MutationTester, "TargetedCase": TargetedCase}[name]
     raise AttributeError(name)

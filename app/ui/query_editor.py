@@ -88,9 +88,10 @@ class QuerySchemaDialog(QDialog):
         type_form.addRow("Fixed prefix/type code", self.prefix)
         right_layout.addLayout(type_form)
         right_layout.addWidget(QLabel("<b>Cấu trúc mỗi truy vấn</b>"))
-        self.fields = QTableWidget(0, 6)
+        self.fields = QTableWidget(0, 8)
         self.fields.setHorizontalHeaderLabels(
-            ["Field", "Type", "Min", "Max", "Fixed value", "Options"])
+            ["Field", "Type", "Min", "Max", "Fixed value", "Options",
+             "Relation source", "Relation mode"])
         self.fields.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.fields.setToolTip(
             "Field được sinh từ trái sang phải; Min/Max được phép dùng field trước đó.")
@@ -201,6 +202,13 @@ class QuerySchemaDialog(QDialog):
             options = self._cell(field_row, 5)
             if options:
                 field["values"] = [self._value(value.strip()) for value in options.split(",")]
+            relation_source = self._cell(field_row, 6)
+            relation_mode = self._cell(field_row, 7)
+            if relation_source and relation_mode:
+                field["relation"] = {
+                    "source": relation_source,
+                    "mode": relation_mode.lower().replace(" ", "_"),
+                }
             fields.append(field)
         self._types[row] = {
             "name": self.type_name.text().strip() or f"Query {row + 1}",
@@ -249,7 +257,7 @@ class QuerySchemaDialog(QDialog):
         target = row + offset
         if row < 0 or target < 0 or target >= self.fields.rowCount():
             return
-        values = [[self._cell(item_row, column) for column in range(6)]
+        values = [[self._cell(item_row, column) for column in range(8)]
                   for item_row in range(self.fields.rowCount())]
         values[row], values[target] = values[target], values[row]
         self._loading = True
@@ -264,10 +272,13 @@ class QuerySchemaDialog(QDialog):
         row = self.fields.rowCount()
         self.fields.insertRow(row)
         options = field.get("values", [])
+        relation = field.get("relation", {})
         values = (
             field.get("name", "field"), field.get("type", "integer"),
             field.get("min", ""), field.get("max", ""), field.get("fixed", ""),
             ", ".join(map(str, options)) if options else "",
+            relation.get("source", "") if isinstance(relation, dict) else "",
+            relation.get("mode", "") if isinstance(relation, dict) else "",
         )
         for column, value in enumerate(values):
             self.fields.setItem(row, column, QTableWidgetItem(str(value)))

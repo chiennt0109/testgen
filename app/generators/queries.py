@@ -4,6 +4,7 @@ from __future__ import annotations
 import random
 import copy
 from typing import Any
+from collections import Counter
 
 from app.core.constraints import ConstraintError, bounds, evaluate
 
@@ -21,7 +22,8 @@ def generate_queries(
     count = int(evaluate(spec.get("count", 1), context))
     if count < 0:
         raise ConstraintError("Query count cannot be negative")
-    query_types = _apply_list_bounds(_normalized_types(spec), spec)
+    query_types = _apply_relation_profile(
+        _apply_list_bounds(_normalized_types(spec), spec), spec)
     if not query_types:
         raise ConstraintError("Query List requires at least one query type")
     weights = [float(item.get("weight", 1)) for item in query_types]
@@ -89,15 +91,56 @@ def _generate_row(
         elif range_pair and field_index in range_pair and range_values is not None:
             value = range_values[range_pair.index(field_index)]
         else:
-            value = _generate_field(field, row_context, rng)
+            value = _generate_related_field(field, row_context, rng)
         row_context[name] = value
         values.append(value)
     return tuple(values)
 
 
-def _generate_field(
+def _generate_related_field(
     field: dict[str, Any], context: dict[str, Any], rng: random.Random,
 ) -> Any:
+    relation = field.get("relation")
+    if isinstance(relation, dict):
+        source_name = str(relation.get("source", ""))
+        source = context.get(source_name)
+        if not isinstance(source, list) or not source:
+            raise ConstraintError(
+                f"Relation source {source_name!r} must be a non-empty generated list")
+        numeric = [value for value in source if isinstance(value, (int, float))]
+        if not numeric:
+            raise ConstraintError(f"Relation source {source_name!r} has no numeric values")
+        mode = _slug(relation.get("mode", "hit"))
+        counts = Counter(numeric)
+        if mode == "hit":
+            return rng.choice(numeric)
+        if mode == "most_frequent":
+            frequency = max(counts.values())
+            return rng.choice([value for value, count in counts.items() if count == frequency])
+        if mode == "least_frequent":
+            frequency = min(counts.values())
+            return rng.choice([value for value, count in counts.items() if count == frequency])
+        if mode == "minimum":
+            return min(numeric)
+        if mode == "maximum":
+            return max(numeric)
+        if mode in {"near_minimum", "near_maximum"}:
+            ordered = sorted(set(numeric))
+            if mode == "near_minimum":
+                return ordered[min(1, len(ordered) - 1)]
+            return ordered[max(0, len(ordered) - 2)]
+        if mode == "miss":
+            low, high = bounds(field, context, (-100, 100))
+            present = set(numeric)
+            candidates = [low, high, low - 1, high + 1]
+            candidates.extend(rng.randint(low, high) for _ in range(30))
+            for candidate in candidates:
+                if candidate not in present and low <= candidate <= high:
+                    return candidate
+            raise ConstraintError(
+                f"Cannot generate a missing value for {field.get('name')}; source covers the domain")
+        raise ConstraintError(f"Unsupported relation mode: {mode}")
+
     kind = _slug(field.get("type", "integer"))
     if kind in {"integer", "long_long"}:
         low, high = bounds(field, context, (0, 100))
@@ -227,6 +270,21 @@ def _apply_list_bounds(
                 field["min"] = _combined_expression("max", field.get("min"), list_min)
             if list_max is not None:
                 field["max"] = _combined_expression("min", field.get("max"), list_max)
+    return result
+
+
+def _apply_relation_profile(
+    query_types: list[dict[str, Any]], spec: dict[str, Any],
+) -> list[dict[str, Any]]:
+    profile = spec.get("relation_profile")
+    if not profile:
+        return query_types
+    result = copy.deepcopy(query_types)
+    for query_type in result:
+        for field in query_type.get("fields", []):
+            relation = field.get("relation")
+            if isinstance(relation, dict):
+                relation["mode"] = profile
     return result
 
 

@@ -11,6 +11,8 @@ from app.models import Project, TestGroup as PlanGroup
 from app.core.stress import StressTester, normalize_output
 from app.core.planning import audit_plan, generation_group
 from app.runners import SolutionRunner
+from app.core.mutation import Candidate, MutationTester, TargetedCase
+from app.analyzers import analyze_strength
 from app.validators import validate_subtasks
 
 def test_constraint_engine():
@@ -267,3 +269,72 @@ def test_subtask_bounds_on_query_list_restrict_query_fields():
     }
     rows = generate_queries(spec, {"n": 100}, random.Random(91))
     assert all(3 <= left <= right <= 7 for left, right in rows)
+
+def test_query_relations_hit_miss_and_frequency():
+    context = {"a": [2, 2, 2, 5, 7, 7]}
+    def values(mode):
+        return generate_queries({"count": 10, "query_types": [{
+            "name": mode, "weight": 100, "fields": [{
+                "name": "x", "type": "integer", "min": 1, "max": 10,
+                "relation": {"source": "a", "mode": mode},
+            }]}]}, context, random.Random(4))
+    assert all(row[0] in context["a"] for row in values("hit"))
+    assert all(row[0] not in context["a"] for row in values("miss"))
+    assert {row[0] for row in values("most_frequent")} == {2}
+    assert {row[0] for row in values("least_frequent")} == {5}
+
+@pytest.mark.parametrize("demo", ["FREQUENCY", "RANGESUM", "GRAPH_TREE"])
+def test_adversarial_demos_kill_all_three_candidates(tmp_path:Path, demo:str):
+    import importlib.util
+    root = Path("examples") / demo
+    spec = importlib.util.spec_from_file_location(f"demo_{demo}", root / "generator.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    cases = [TargetedCase(module.generate(seed, {"test_index": seed}), seed,
+                          f"{demo} adversarial case {seed}") for seed in range(1, 5)]
+    candidates = [Candidate(path.stem, path, 1.0)
+                  for path in sorted(root.glob("wrong_*.py"))]
+    report = MutationTester().run(root / "solution.py", candidates, cases, tmp_path / demo)
+    assert len(report.results) == 3
+    assert report.coverage == 1.0
+    assert all(result.status == "killed" for result in report.results)
+    assert all(result.reason for result in report.results)
+
+def test_subtask_strategy_rotates_targeted_profiles():
+    project = Project(
+        test_count=3,
+        schema=[{"type": "integer", "name": "n", "min": 1, "max": 5},
+                {"type": "array", "name": "a", "length": "n", "min": 1, "max": 9}],
+        subtasks=[{"name": "S", "start": 1, "end": 3, "constraints": {},
+                  "strategy": {"edge_profiles": ["array:all_equal", "array:all_distinct"],
+                               "performance_profiles": ["array:one_dominant_value"],
+                               "required_coverage": ["all_equal"]}}],
+    )
+    groups = [generation_group(project, index) for index in range(1, 4)]
+    assert [group["overrides"]["a"]["pattern"] for group in groups] == [
+        "all_equal", "all_distinct", "one_dominant_value"]
+    assert [group["adversarial_profiles"][0]["category"] for group in groups] == [
+        "edge", "edge", "performance"]
+
+def test_strength_analyzer_warns_about_weak_distribution(tmp_path:Path):
+    folder = tmp_path / "suite"; (folder / "test01").mkdir(parents=True); (folder / "test02").mkdir()
+    (folder / "manifest.json").write_text(json.dumps({"tests": [
+        {"adversarial_profiles": [{"category": "edge", "profile": "minimum"}]},
+        {"adversarial_profiles": []},
+    ]}), encoding="utf-8")
+    (folder / "test01" / "X.out").write_text("0\n"); (folder / "test02" / "X.out").write_text("0\n")
+    report = analyze_strength(folder, ["hit", "miss", "maximum"])
+    assert "Quá nhiều output bằng 0" in report["warnings"]
+    assert any("required coverage" in warning for warning in report["warnings"])
+
+def test_mutation_tester_marks_performance_timeout(tmp_path:Path):
+    reference = tmp_path / "reference.py"; slow = tmp_path / "linear_scan_per_query.py"
+    reference.write_text("print(1)\n", encoding="utf-8")
+    slow.write_text("import time\ntime.sleep(1)\nprint(1)\n", encoding="utf-8")
+    report = MutationTester().run(
+        reference, [Candidate("linear_scan_per_query", slow, .05)],
+        [TargetedCase("", 99, "max-size worst-case", "performance")],
+        tmp_path / "mutation")
+    assert report.results[0].status == "timeout"
+    assert report.results[0].reason == "max-size worst-case"

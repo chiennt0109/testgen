@@ -38,7 +38,9 @@ def array(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> list
     if n < 0: raise ConstraintError("Array length cannot be negative")
     pattern = spec.get("pattern", "random").lower().replace(" ", "_")
     if spec.get("distinct") and hi-lo+1 < n: raise ConstraintError("Not enough distinct values")
-    if pattern in {"permutation"}: result = list(range(lo, lo+n));
+    if pattern in {"permutation", "all_distinct"}:
+        if hi-lo+1 < n: raise ConstraintError("Range too small for all distinct values")
+        result = rng.sample(range(lo, hi+1), n)
     elif pattern == "all_equal": result = [rng.randint(lo, hi)]*n
     elif pattern in {"binary", "mostly_zero", "mostly_one"}:
         if lo > 0 or hi < 1: raise ConstraintError("Binary pattern requires range containing 0 and 1")
@@ -58,6 +60,12 @@ def array(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> list
     elif pattern in {"mountain", "valley"}:
         vals = [lo + (hi-lo)*min(i, n-1-i)//max(1, (n-1)//2) for i in range(n)]; result = vals if pattern == "mountain" else [lo+hi-x for x in vals]
     elif pattern == "extreme_values": result = [rng.choice([lo, hi]) for _ in range(n)]
+    elif pattern == "one_dominant_value":
+        dominant=rng.randint(lo,hi); result=[dominant if rng.random()<.9 else rng.randint(lo,hi) for _ in range(n)]
+    elif pattern == "sparse_domain":
+        pool=sorted(set([lo,hi,(lo+hi)//2])); result=[rng.choice(pool) for _ in range(n)]
+    elif pattern == "dense_domain":
+        width=min(hi-lo+1,max(1,n)); start=rng.randint(lo,hi-width+1); result=[rng.randint(start,start+width-1) for _ in range(n)]
     elif pattern == "custom_pattern": result = [int(x) for x in spec.get("values", [])]
     else: result = [rng.randint(lo, hi) for _ in range(n)]
     if len(result) != n or any(x < lo or x > hi for x in result): raise ConstraintError("Array pattern violates length or bounds")
@@ -69,6 +77,7 @@ def array(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> list
 def graph(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> list[tuple[int, ...]]:
     n, m = int(evaluate(spec.get("n", "n"), ctx)), int(evaluate(spec.get("m", "m"), ctx)); directed = bool(spec.get("directed")); simple = spec.get("simple", True)
     weighted = bool(spec.get("weighted")); self_loop = bool(spec.get("allow_self_loop")); connected = bool(spec.get("connected")); pattern = spec.get("pattern", "random_sparse").lower().replace(" ", "_")
+    if pattern=="extreme_weights": spec={**spec,"weight_mode":"extreme"}; pattern="random_sparse"
     maximum = n*n if directed and self_loop else n*(n-1) if directed else n*(n-1)//2
     if not simple: maximum = max(maximum, m)
     if n < 0 or m < 0 or m > maximum or connected and n and m < n-1: raise ConstraintError("Invalid graph n/m constraints")
@@ -84,16 +93,29 @@ def graph(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> list
         for i in range(1,n): add(i,i+1)
         if pattern=="star": edges=[]; seen=set(); [add(1,i) for i in range(2,n+1)]
         if pattern=="cycle" and n>2: add(n,1)
+    components: list[list[int]] | None = None
+    if pattern in {"disconnected", "two_components", "many_components"} and n>1:
+        edges=[]; seen=set(); count=2 if pattern!="many_components" else min(n,max(2,math.isqrt(n)))
+        components=[[] for _ in range(count)]
+        for vertex in range(1,n+1): components[(vertex-1)%count].append(vertex)
     attempts=0
-    while len(edges)<m and attempts < max(100, m*20): add(rng.randint(1,n),rng.randint(1,n)); attempts+=1
+    while len(edges)<m and attempts < max(100, m*20):
+        if components:
+            component=rng.choice(components); add(rng.choice(component),rng.choice(component))
+        else: add(rng.randint(1,n),rng.randint(1,n))
+        attempts+=1
     if len(edges)!=m: raise ConstraintError("Could not construct requested graph")
     if weighted:
-        lo,hi=bounds({"min":spec.get("weight_min",1),"max":spec.get("weight_max",100)},ctx); return [(u,v,rng.randint(lo,hi)) for u,v in edges]
+        lo,hi=bounds({"min":spec.get("weight_min",1),"max":spec.get("weight_max",100)},ctx)
+        if spec.get("weight_mode")=="extreme": return [(u,v,lo if i%2==0 else hi) for i,(u,v) in enumerate(edges)]
+        return [(u,v,rng.randint(lo,hi)) for u,v in edges]
     return edges
 
 
 def tree(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> list[tuple[int, ...]]:
     n=int(evaluate(spec.get("n","n"),ctx)); pattern=spec.get("pattern","random_tree").lower().replace(" ","_"); edges=[]
+    if pattern=="deep_tree": pattern="path"
+    if pattern=="extreme_weights": spec={**spec,"weight_mode":"extreme"}; pattern="path"
     for v in range(2,n+1):
         if pattern=="path": p=v-1
         elif pattern=="star": p=1
@@ -103,7 +125,9 @@ def tree(spec: dict[str, Any], ctx: dict[str, Any], rng: random.Random) -> list[
         else: p=rng.randint(1,v-1)
         edges.append((p,v))
     if spec.get("weighted"):
-        lo,hi=bounds({"min":spec.get("weight_min",1),"max":spec.get("weight_max",100)},ctx); return [(u,v,rng.randint(lo,hi)) for u,v in edges]
+        lo,hi=bounds({"min":spec.get("weight_min",1),"max":spec.get("weight_max",100)},ctx)
+        if spec.get("weight_mode")=="extreme": return [(u,v,lo if i%2==0 else hi) for i,(u,v) in enumerate(edges)]
+        return [(u,v,rng.randint(lo,hi)) for u,v in edges]
     return edges
 
 

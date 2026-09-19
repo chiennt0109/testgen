@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
@@ -37,10 +38,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.analyzers import analyze
+from app.analyzers import analyze, analyze_strength
 from app.core import (
-    GenerationEngine, GenerationPipeline, StressTester, audit_plan,
-    generation_group,
+    Candidate, GenerationEngine, GenerationPipeline, MutationTester, StressTester,
+    TargetedCase, audit_plan, generation_group,
 )
 from app.exporters import export_zip
 from app.models import Project, TestGroup
@@ -49,6 +50,7 @@ from app.validators import validate_input, validate_subtasks
 
 from .schema_builder import SchemaBuilder
 from .constraint_editor import ConstraintEditorDialog, summarize_constraints
+from .strategy_editor import StrategyEditorDialog, summarize_strategy
 
 
 class Worker(QObject):
@@ -281,21 +283,26 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel(
             "Mỗi subtask áp dụng constraints cho khoảng test đã chọn. "
             "Constraints được kiểm tra lại trong quá trình Generate All."))
-        self.subtask_table = QTableWidget(0, 4)
+        self.subtask_table = QTableWidget(0, 5)
         self.subtask_table.setHorizontalHeaderLabels(
-            ["Subtask", "Test bắt đầu", "Test kết thúc", "Constraints"])
+            ["Subtask", "Test bắt đầu", "Test kết thúc", "Constraints", "Adversarial strategy"])
         self.subtask_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.subtask_table.doubleClicked.connect(lambda _index: self._edit_subtask_constraints())
+        self.subtask_table.doubleClicked.connect(
+            lambda index: self._edit_subtask_strategy()
+            if index.column() == 4 else self._edit_subtask_constraints())
         layout.addWidget(self.subtask_table)
         buttons = QHBoxLayout()
         add = QPushButton("Thêm subtask")
         add.clicked.connect(self._add_subtask_row)
         edit_constraints = QPushButton("Chỉnh constraints…")
         edit_constraints.clicked.connect(self._edit_subtask_constraints)
+        edit_strategy = QPushButton("Chỉnh strategy…")
+        edit_strategy.clicked.connect(self._edit_subtask_strategy)
         remove = QPushButton("Xóa")
         remove.clicked.connect(lambda: self._remove_table_row(self.subtask_table))
         buttons.addWidget(add)
         buttons.addWidget(edit_constraints)
+        buttons.addWidget(edit_strategy)
         buttons.addWidget(remove)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -308,6 +315,8 @@ class MainWindow(QMainWindow):
         form = QFormLayout()
         self.solution_path = QLineEdit()
         self.brute_path = QLineEdit()
+        self.candidate_paths = QLineEdit()
+        self.candidate_paths.setPlaceholderText("candidate1.cpp; candidate2.py; ...")
         self.language = QComboBox()
         self.language.addItems(["cpp", "python", "exe"])
         self.cpp_standard = QComboBox()
@@ -321,6 +330,7 @@ class MainWindow(QMainWindow):
         self.generate_outputs.setChecked(True)
         form.addRow("Solution", self._path_picker(self.solution_path, "Chọn solution"))
         form.addRow("Brute", self._path_picker(self.brute_path, "Chọn brute"))
+        form.addRow("Wrong / candidate solutions", self.candidate_paths)
         form.addRow("Language", self.language)
         form.addRow("C++ standard", self.cpp_standard)
         form.addRow("I/O mode", self.io_mode)
@@ -374,9 +384,12 @@ class MainWindow(QMainWindow):
         buttons = QHBoxLayout()
         start = QPushButton("Start Cross Check")
         start.clicked.connect(self.start_stress)
+        mutation = QPushButton("Mutation / Candidate Test")
+        mutation.clicked.connect(self.start_mutation)
         stop = QPushButton("Stop")
         stop.clicked.connect(self._cancel)
         buttons.addWidget(start)
+        buttons.addWidget(mutation)
         buttons.addWidget(stop)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -470,6 +483,9 @@ class MainWindow(QMainWindow):
         self.project.subtasks = self._read_subtasks()
         self.project.solution_path = self._relative_path(self.solution_path.text())
         self.project.brute_path = self._relative_path(self.brute_path.text())
+        self.project.candidate_paths = [
+            self._relative_path(value) for value in self.candidate_paths.text().split(";")
+            if value.strip()]
         self.project.validator_path = self._relative_path(self.custom_validator.text())
         self.project.language = self.language.currentText()
         self.project.io_mode = str(self.io_mode.currentData())
@@ -501,6 +517,7 @@ class MainWindow(QMainWindow):
         self.schema_builder.set_schema(self.project.schema)
         self.solution_path.setText(self.project.solution_path)
         self.brute_path.setText(self.project.brute_path)
+        self.candidate_paths.setText("; ".join(self.project.candidate_paths))
         self.custom_validator.setText(self.project.validator_path)
         self.language.setCurrentText(self.project.language)
         self.cpp_standard.setCurrentText(self.project.cpp_standard)
@@ -706,14 +723,64 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Stress Test Error", str(exc))
 
+    def start_mutation(self) -> None:
+        """Generate targeted cases and retain those that kill candidates."""
+
+        try:
+            self._sync_project()
+            if not self.project.candidate_paths:
+                raise ValueError("Hãy nhập ít nhất một wrong/candidate solution ở trang Solution.")
+            iterations = self.stress_iterations.value()
+            timeout = self.stress_timeout.value()
+            project_dir = self._project_dir()
+            project = self.project
+            generated_folder = self._resolved_generated_path()
+
+            def task(progress: Callable[[int, int], None]) -> Any:
+                cases: list[TargetedCase] = []
+                for offset in range(iterations):
+                    index = offset % project.test_count + 1
+                    group = generation_group(project, index)
+                    seed = project.seed + offset + 1
+                    text, _ = GenerationEngine().generate(
+                        project, seed, index=index, group=group, base=project_dir)
+                    profiles = group.get("adversarial_profiles", [])
+                    reason = ", ".join(str(item.get("profile")) for item in profiles)
+                    category = str(profiles[0].get("category")) if profiles else "correctness"
+                    cases.append(TargetedCase(
+                        text, seed, reason or f"Test Plan group {group['name']}", category))
+                    progress(offset + 1, iterations * 2)
+                candidates = [Candidate(
+                    Path(path).stem,
+                    Path(path) if Path(path).is_absolute() else project_dir / path,
+                    timeout,
+                ) for path in project.candidate_paths]
+                report = MutationTester(SolutionRunner(project.compiler_path or None)).run(
+                    project_dir / project.solution_path, candidates, cases,
+                    project_dir / "mutation_results", cpp_standard=project.cpp_standard)
+                report_path = project_dir / "mutation_results" / "mutation_report.json"
+                if generated_folder and generated_folder.exists() and report_path.exists():
+                    shutil.copy2(report_path, generated_folder / "mutation_report.json")
+                progress(iterations * 2, iterations * 2)
+                return report
+
+            self.nav.setCurrentRow(6)
+            self.stress_status.setPlainText("Đang tìm counterexample cho candidates…")
+            self._start_task("Mutation testing…", task, self._mutation_finished)
+        except Exception as exc:
+            QMessageBox.critical(self, "Mutation Test Error", str(exc))
+
     def run_analyze(self) -> None:
         folder = self._resolved_generated_path()
         if not folder or not folder.exists():
             QMessageBox.warning(self, "Analyze", "Chưa có generated tests.")
             return
+        required = [coverage for subtask in self.project.subtasks
+                    for coverage in subtask.get("strategy", {}).get("required_coverage", [])]
 
         def task(progress: Callable[[int, int], None]) -> dict[str, Any]:
             result = analyze(folder)
+            result["strength"] = analyze_strength(folder, required)
             progress(1, 1)
             return result
 
@@ -841,6 +908,11 @@ class MainWindow(QMainWindow):
         self.stress_status.setPlainText("\n".join(lines))
         self.task_status.setText("Stress test hoàn tất")
 
+    def _mutation_finished(self, report: Any) -> None:
+        self.stress_status.setPlainText(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+        self.task_status.setText(
+            f"Mutation test hoàn tất: killed {report.killed}/{len(report.results)}")
+
     def _analysis_finished(self, result: Any) -> None:
         self.analysis_result.setPlainText(json.dumps(result, indent=2, ensure_ascii=False))
         self.task_status.setText("Analyze hoàn tất")
@@ -929,6 +1001,10 @@ class MainWindow(QMainWindow):
         item.setData(Qt.ItemDataRole.UserRole, {})
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.subtask_table.setItem(row, 3, item)
+        strategy_item = QTableWidgetItem("Chưa có strategy")
+        strategy_item.setData(Qt.ItemDataRole.UserRole, {})
+        strategy_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        self.subtask_table.setItem(row, 4, strategy_item)
         self.subtask_table.setCurrentCell(row, 0)
 
     def _edit_subtask_constraints(self) -> None:
@@ -946,6 +1022,19 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, constraints)
             item.setText(summarize_constraints(constraints))
 
+    def _edit_subtask_strategy(self) -> None:
+        row = self.subtask_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Subtasks", "Hãy chọn một subtask.")
+            return
+        item = self.subtask_table.item(row, 4)
+        current = item.data(Qt.ItemDataRole.UserRole) if item else {}
+        dialog = StrategyEditorDialog(current, self)
+        if dialog.exec() == StrategyEditorDialog.DialogCode.Accepted:
+            strategy = dialog.strategy()
+            item.setData(Qt.ItemDataRole.UserRole, strategy)
+            item.setText(summarize_strategy(strategy))
+
     def _read_subtasks(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for row in range(self.subtask_table.rowCount()):
@@ -956,6 +1045,8 @@ class MainWindow(QMainWindow):
                     "end": int(self._cell(self.subtask_table, row, 2)),
                     "constraints": (
                         self.subtask_table.item(row, 3).data(Qt.ItemDataRole.UserRole) or {}),
+                    "strategy": (
+                        self.subtask_table.item(row, 4).data(Qt.ItemDataRole.UserRole) or {}),
                 })
             except ValueError as exc:
                 raise ValueError(f"Subtask dòng {row + 1} không hợp lệ: {exc}") from exc
@@ -976,6 +1067,12 @@ class MainWindow(QMainWindow):
             constraint_item.setFlags(
                 Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.subtask_table.setItem(row, 3, constraint_item)
+            strategy = item.get("strategy", {})
+            strategy_item = QTableWidgetItem(summarize_strategy(strategy))
+            strategy_item.setData(Qt.ItemDataRole.UserRole, strategy)
+            strategy_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.subtask_table.setItem(row, 4, strategy_item)
 
     @staticmethod
     def _remove_table_row(table: QTableWidget) -> None:

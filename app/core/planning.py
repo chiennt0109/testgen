@@ -6,6 +6,7 @@ import copy
 from typing import Any
 
 from app.models import Project
+from .adversarial import choose_subtask_profile, merge_overrides, profile_overrides
 
 
 @dataclass(slots=True)
@@ -96,6 +97,7 @@ def generation_group(project: Project, test_index: int) -> dict[str, Any]:
         position = next_position
 
     subtask_names: list[str] = []
+    selected_adversarial: list[dict[str, str]] = []
     for subtask in project.subtasks:
         try:
             applies = int(subtask.get("start", 1)) <= test_index <= int(subtask.get("end", 1))
@@ -108,11 +110,21 @@ def generation_group(project: Project, test_index: int) -> dict[str, Any]:
             if isinstance(restriction, dict):
                 overrides[variable] = _intersect_rules(
                     overrides.get(variable, {}), restriction)
+        strategy = subtask.get("strategy", {})
+        if isinstance(strategy, dict):
+            position = test_index - int(subtask.get("start", 1))
+            chosen = choose_subtask_profile(strategy, position)
+            if chosen:
+                category, profile = chosen
+                overrides = merge_overrides(
+                    overrides, profile_overrides(project.schema, profile, category))
+                selected_adversarial.append({"category": category, "profile": profile})
     return {
         "name": selected_name,
         "profile": selected_profile,
         "overrides": overrides,
         "subtasks": subtask_names,
+        "adversarial_profiles": selected_adversarial,
     }
 
 

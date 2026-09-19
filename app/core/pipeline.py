@@ -88,6 +88,7 @@ class GenerationPipeline:
                     "id": f"{index:02d}", "folder": folder, "seed": seed,
                     "group": group["name"], "input_sha256": digest,
                     "subtasks": group.get("subtasks", []),
+                    "adversarial_profiles": group.get("adversarial_profiles", []),
                     "duplicate_of": duplicate,
                 })
                 if progress:

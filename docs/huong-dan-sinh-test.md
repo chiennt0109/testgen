@@ -164,3 +164,38 @@ lại, hoặc thêm thư mục `bin` của MinGW vào `PATH` nếu đang chạy 
 
 Nếu task nền đã kết thúc, có thể chạy Generate/Stress/Analyze tiếp theo ngay. Nếu
 đang chạy, app báo **Một tác vụ nền đang chạy** thay vì tạo thêm thread song song.
+
+## 11. Adversarial strategies và mutation testing
+
+Trong **Subtasks**, chọn một dòng rồi bấm **Chỉnh strategy…**. Mỗi subtask có bốn
+nhóm riêng:
+
+- Edge-case profiles: biên, cấu trúc đặc biệt, min/max.
+- Correctness profiles: hit/miss, duplicate, boundary, quan hệ dữ liệu–query.
+- Performance profiles: max constraints và worst-case cho thuật toán naive.
+- Required coverage: các profile bắt buộc phải xuất hiện trong report.
+
+Có thể ghi rõ block family, ví dụ `array:all_equal`, `query_list:hit`,
+`graph:path`. Các profile được luân phiên giữa các test của subtask và được ghi vào
+manifest cùng lý do/category.
+
+Query field có hai cột **Relation source** và **Relation mode**. Source là tên array
+đã sinh trước đó; mode hỗ trợ `hit`, `miss`, `minimum`, `maximum`,
+`most_frequent`, `least_frequent`, `near_minimum`, `near_maximum`. Generator chọn
+giá trị dựa trên array thực tế thay vì sinh độc lập.
+
+Tại **Solution**, nhập nhiều file trong **Wrong / candidate solutions**, cách nhau
+bằng dấu `;`. Sang **Stress Test**, bấm **Mutation / Candidate Test**. App chạy
+reference một lần cho mỗi targeted case, so sánh mọi candidate, giữ test đầu tiên
+làm candidate sai/runtime/timeout và lưu tại `mutation_results/<candidate>/` cùng
+reason, seed, output và stderr. `mutation_report.json` báo `killed`, `timeout` hoặc
+`survived`; còn mutant sống nghĩa là bộ test yếu.
+
+Trang **Analyze** kết hợp boundary coverage, relation hit/miss, output diversity,
+mutation coverage và performance coverage thành strength score. Nó cảnh báo output
+quá nhiều số 0/giống nhau, thiếu answer > 1, thiếu min/max, thiếu max-size hoặc còn
+candidate sống.
+
+Ba demo nghiệm thu nằm trong `examples/FREQUENCY`, `examples/RANGESUM` và
+`examples/GRAPH_TREE`; xem `examples/ADVERSARIAL_DEMOS.md` để chạy chứng minh cả
+chín wrong solutions đều bị giết.

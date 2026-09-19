@@ -1,2 +1,4 @@
 from .quality import analyze
-__all__=["analyze"]
+from .strength import analyze_strength
+
+__all__=["analyze", "analyze_strength"]

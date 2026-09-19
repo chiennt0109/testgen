@@ -35,11 +35,12 @@ BLOCK_TYPES = [
 ]
 
 ARRAY_PATTERNS = [
-    "Random", "All Equal", "Increasing", "Strict Increasing", "Decreasing",
+    "Random", "All Equal", "All Distinct", "Increasing", "Strict Increasing", "Decreasing",
     "Strict Decreasing", "Nondecreasing", "Nonincreasing", "Alternating",
     "Zigzag", "Many Duplicates", "Few Distinct", "Permutation", "Binary",
     "Mostly Zero", "Mostly One", "Arithmetic Progression", "Periodic",
-    "Mountain", "Valley", "Random Blocks", "Extreme Values", "Custom Pattern",
+    "Mountain", "Valley", "Random Blocks", "Extreme Values", "One Dominant Value",
+    "Sparse Domain", "Dense Domain", "Custom Pattern",
 ]
 
 
@@ -397,10 +398,11 @@ class SchemaBuilder(QWidget):
         if "graph" in kind:
             return ["Random Sparse", "Random Dense", "Path", "Star", "Cycle",
                     "Complete", "Almost Complete", "Disconnected", "Two Components",
-                    "Many Components"]
+                    "Many Components", "Extreme Weights"]
         if "tree" in kind:
             return ["Random Tree", "Path", "Star", "Balanced Binary Tree",
-                    "Random Parent", "Broom", "Caterpillar"]
+                    "Random Parent", "Broom", "Caterpillar", "Deep Tree",
+                    "Extreme Weights"]
         if kind in {"query_list", "operation_list", "interval_list"}:
             return ["Random Range", "Single Point", "Whole Range", "Prefix", "Suffix",
                     "Short Range", "Long Range", "Nested", "Overlapping", "Repeated",

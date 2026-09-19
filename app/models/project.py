@@ -28,6 +28,7 @@ class Project:
     language: str = "cpp"
     solution_path: str = "solution.cpp"
     brute_path: str = "brute.cpp"
+    candidate_paths: list[str] = field(default_factory=list)
     validator_path: str = "validator.py"
     generator_path: str = ""
     seed: int = 123456
