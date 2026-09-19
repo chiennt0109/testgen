@@ -8,3 +8,4 @@ logs/
 *.spec
 generated/
 counterexamples/
+.tgs-build/

@@ -7,8 +7,8 @@ from app.core.pipeline import GenerationPipeline
 from app.exporters import export_zip
 from app.generators.blocks import array,graph,query_list,tree
 from app.generators.queries import generate_queries
-from app.models import Project
-from app.core.stress import normalize_output
+from app.models import Project, TestGroup as PlanGroup
+from app.core.stress import StressTester, normalize_output
 from app.validators import validate_subtasks
 
 def test_constraint_engine():
@@ -151,3 +151,22 @@ def test_pipeline_rejects_test_outside_subtask_constraint(tmp_path:Path):
     )
     with pytest.raises(RuntimeError, match="Subtask Constraint Error"):
         GenerationPipeline().generate(project, tmp_path, tmp_path / "generated" / "SUBTASK")
+
+def test_stress_tester_uses_profile_and_runs_repeatedly(tmp_path:Path):
+    (tmp_path / "solution.py").write_text(
+        "import sys\nprint(int(sys.stdin.read().strip()) * 2)\n", encoding="utf-8")
+    (tmp_path / "brute.py").write_text(
+        "import sys\nn=int(sys.stdin.read().strip())\nprint(n+n)\n", encoding="utf-8")
+    project = Project(
+        solution_path="solution.py", brute_path="brute.py", test_count=1,
+        schema=[{"type": "integer", "name": "n", "min": 1, "max": 100}],
+        test_plan=[PlanGroup("Tiny", 1, "small", "increment",
+                             {"n": {"min": 5, "max": 5}})],
+    )
+    progress: list[tuple[int, int, int]] = []
+    result = StressTester().run(
+        project, tmp_path, 3, 1.0, profile="Small random",
+        progress=lambda current, total, seed, _elapsed: progress.append((current, total, seed)))
+    assert result.passed == 3 and result.failed == 0
+    assert [item[0] for item in progress] == [1, 2, 3]
+    assert not (tmp_path / ".tgs-build").exists()

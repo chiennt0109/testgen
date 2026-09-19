@@ -2,6 +2,8 @@
 
 Ứng dụng desktop offline, deterministic để thiết kế và xuất bộ test thi lập trình. Backend tách khỏi PySide6 GUI: schema blocks, constraint engine, test plan, validation, SHA-256 duplicate detection, transactional generation, solution runner và ZIP export.
 
+Hướng dẫn thao tác đầy đủ: [Hướng dẫn sinh test](docs/huong-dan-sinh-test.md).
+
 ## Cài môi trường phát triển
 
 Yêu cầu Python 3.12+, và `g++` trong `PATH` nếu chạy lời giải C++.

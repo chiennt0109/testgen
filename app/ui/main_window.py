@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         self.generated_path: Path | None = None
         self.preview_text = ""
         self._cancel_requested = False
+        self._task_active = False
         self._thread: QThread | None = None
         self._worker: Worker | None = None
         self.setWindowTitle("Test Generator Studio")
@@ -646,10 +647,12 @@ class MainWindow(QMainWindow):
             self._sync_project()
             iterations = self.stress_iterations.value()
             timeout = self.stress_timeout.value()
+            profile = self.stress_profile.currentText()
 
             def task(progress: Callable[[int, int], None]) -> Any:
                 return StressTester().run(
                     self.project, self._project_dir(), iterations, timeout,
+                    profile=profile,
                     progress=lambda current, total, seed, elapsed: progress(current, total),
                     cancelled=lambda: self._cancel_requested)
 
@@ -713,9 +716,13 @@ class MainWindow(QMainWindow):
 
     def _start_task(self, status: str, task: Callable[[Callable[[int, int], None]], Any],
                     completed: Callable[[Any], None]) -> None:
-        if self._thread and self._thread.isRunning():
+        # Never query an old QThread wrapper here. Qt owns and deletes the native
+        # object after deleteLater(); calling isRunning() on that stale wrapper
+        # raises "Internal C++ object already deleted" on PySide6.
+        if self._task_active:
             QMessageBox.information(self, "Đang bận", "Một tác vụ nền đang chạy.")
             return
+        self._task_active = True
         self._cancel_requested = False
         self.cancel_button.setEnabled(True)
         self.progress.setValue(0)
@@ -729,9 +736,9 @@ class MainWindow(QMainWindow):
         worker.finished.connect(thread.quit)
         worker.failed.connect(self._task_failed)
         worker.failed.connect(thread.quit)
+        thread.finished.connect(self._release_task)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._task_stopped)
         self._thread = thread
         self._worker = worker
         thread.start()
@@ -744,7 +751,12 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Task Error", message)
         self.task_status.setText("Tác vụ thất bại")
 
-    def _task_stopped(self) -> None:
+    def _release_task(self) -> None:
+        """Release Python references before Qt deletes the native objects."""
+
+        self._thread = None
+        self._worker = None
+        self._task_active = False
         self.cancel_button.setEnabled(False)
         if self.task_status.text().startswith("Đang"):
             self.task_status.setText("Hoàn tất")
@@ -775,6 +787,9 @@ class MainWindow(QMainWindow):
         self.task_status.setText("Analyze hoàn tất")
 
     def _cancel(self) -> None:
+        if not self._task_active:
+            self.task_status.setText("Không có tác vụ đang chạy")
+            return
         self._cancel_requested = True
         self.task_status.setText("Đang yêu cầu hủy…")
 
@@ -950,7 +965,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: Any) -> None:
         """Ask a running cooperative worker to stop before closing."""
 
-        if self._thread and self._thread.isRunning():
+        if self._task_active and self._thread is not None:
             answer = QMessageBox.question(
                 self, "Tác vụ đang chạy", "Hủy tác vụ và đóng ứng dụng?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
