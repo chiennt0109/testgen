@@ -1,0 +1,16 @@
+{
+  "problem_name": "MAXSEQ",
+  "input_filename": "MAXSEQ.inp",
+  "output_filename": "MAXSEQ.out",
+  "test_folder_pattern": "test{index:02d}",
+  "test_count": 10,
+  "language": "cpp",
+  "solution_path": "solution.cpp",
+  "brute_path": "brute.cpp",
+  "validator_path": "validator.py",
+  "generator_path": "generator.py",
+  "seed": 123456,
+  "schema": [],
+  "test_plan": [{"name":"ten profiles","count":10,"profile":"mixed","seed_mode":"increment","overrides":{}}],
+  "subtasks": []
+}
