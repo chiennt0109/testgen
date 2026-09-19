@@ -41,6 +41,18 @@ Ví dụ range query dùng hai field `l: Integer [1,n]` và
 `r: Integer [l,n]`. Operation trộn có thể dùng type prefix `1` với fields `i,x`
 weight 40%, và prefix `2` với fields `l,r` weight 60%. Preset hoàn chỉnh nằm tại
 `presets/range_sum.json`.
+
+### Test Plan và Subtasks
+
+Hai màn hình này không yêu cầu nhập JSON. Chọn một group hoặc subtask rồi bấm
+**Chỉnh constraints…** để chọn biến/block và nhập Exact, Min, Max,
+Length/Count hoặc Pattern trong bảng. Cột Constraints hiển thị bản tóm tắt dễ đọc;
+dữ liệu có cấu trúc chỉ được serialize vào `project.json` khi lưu project.
+
+Test Plan overrides được áp dụng trước khi generator chạy. Subtask constraints
+được kiểm tra lại trên context thực tế của từng test thuộc khoảng test đã chọn;
+batch sẽ dừng với `Subtask Constraint Error` nếu test vi phạm thay vì âm thầm xuất
+một bộ test sai subtask.
 3. **Generate Preview** kiểm tra dữ liệu trong bộ nhớ; **Save As** lưu `project.json`.
 4. Đặt `solution.cpp` cạnh project. **Generate All** compile một lần, validate và xuất `.inp/.out`, rồi mới publish cả batch. Nếu đích đã tồn tại, app tạo `_V02` thay vì ghi đè.
 5. Manifest lưu seed riêng (`master_seed + index`) và SHA-256. Mở lại cùng project sẽ tái tạo input giống nhau.

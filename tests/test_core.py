@@ -9,6 +9,7 @@ from app.generators.blocks import array,graph,query_list,tree
 from app.generators.queries import generate_queries
 from app.models import Project
 from app.core.stress import normalize_output
+from app.validators import validate_subtasks
 
 def test_constraint_engine():
     assert evaluate("n*(n-1)/2",{"n":5})==10
@@ -127,3 +128,26 @@ def test_query_duplicate_avoid_and_sorted_order():
     rows = generate_queries(spec, {}, random.Random(31))
     assert len(rows) == len(set(rows)) == 5
     assert rows == sorted(rows, key=lambda row: tuple(str(value) for value in row))
+
+def test_subtask_constraints_validate_scalar_and_array_context():
+    subtasks = [{
+        "name": "Small", "start": 1, "end": 5,
+        "constraints": {
+            "n": {"min": 1, "max": 10},
+            "a": {"length": "n", "min": -5, "max": 5},
+        },
+    }]
+    assert validate_subtasks(2, {"n": 3, "a": [-5, 0, 5]}, subtasks) == (True, "")
+    valid, reason = validate_subtasks(2, {"n": 3, "a": [-6, 0, 5]}, subtasks)
+    assert not valid and "below -5" in reason
+    assert validate_subtasks(8, {"n": 100, "a": []}, subtasks) == (True, "")
+
+def test_pipeline_rejects_test_outside_subtask_constraint(tmp_path:Path):
+    project = Project(
+        problem_name="SUBTASK", input_filename="SUBTASK.inp", test_count=1,
+        schema=[{"type": "integer", "name": "n", "min": 20, "max": 20}],
+        subtasks=[{"name": "n <= 10", "start": 1, "end": 1,
+                  "constraints": {"n": {"max": 10}}}],
+    )
+    with pytest.raises(RuntimeError, match="Subtask Constraint Error"):
+        GenerationPipeline().generate(project, tmp_path, tmp_path / "generated" / "SUBTASK")

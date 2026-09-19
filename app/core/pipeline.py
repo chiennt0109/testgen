@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 from app.models import Project
 from app.runners import SolutionRunner
-from app.validators import validate_input
+from app.validators import validate_input, validate_subtasks
 from .engine import GenerationEngine
 
 class GenerationPipeline:
@@ -29,9 +29,11 @@ class GenerationPipeline:
                 seed=project.seed+i
                 custom_validator = project_dir / project.validator_path if project.validator_path else None
                 for retry in range(101):
-                    text,_=self.engine.generate(project,seed,index=i,group=group,base=project_dir)
+                    text,context=self.engine.generate(project,seed,index=i,group=group,base=project_dir)
                     valid,message=validate_input(text,project.to_dict(),custom_validator)
                     if not valid:raise RuntimeError(f"Validator Error at test{i:02d}: {message}")
+                    valid,message=validate_subtasks(i,context,project.subtasks)
+                    if not valid:raise RuntimeError(f"Subtask Constraint Error at test{i:02d}: {message}")
                     digest=hashlib.sha256(text.encode()).hexdigest(); duplicate=seen.get(digest)
                     if not duplicate or project.duplicate_policy != "regenerate":
                         break

@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot, Qt
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -45,6 +45,7 @@ from app.runners import SolutionRunner
 from app.validators import validate_input
 
 from .schema_builder import SchemaBuilder
+from .constraint_editor import ConstraintEditorDialog, summarize_constraints
 
 
 class Worker(QObject):
@@ -239,21 +240,27 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel("<h2>Test Plan</h2>"))
-        layout.addWidget(QLabel("Chia bộ test thành các nhóm; overrides là JSON theo tên biến."))
+        layout.addWidget(QLabel(
+            "Chia bộ test thành các nhóm. Chọn một nhóm và bấm Chỉnh constraints "
+            "để cấu hình min/max/exact/pattern bằng giao diện."))
         self.plan_table = QTableWidget(0, 5)
         self.plan_table.setHorizontalHeaderLabels(
-            ["Group name", "Number of tests", "Size profile", "Seed mode", "Overrides"])
+            ["Group name", "Number of tests", "Size profile", "Seed mode", "Constraints"])
         self.plan_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.plan_table.doubleClicked.connect(lambda _index: self._edit_plan_constraints())
         layout.addWidget(self.plan_table)
         buttons = QHBoxLayout()
         add = QPushButton("Thêm nhóm")
         add.clicked.connect(self._add_plan_row)
         edge = QPushButton("Add Edge Cases")
         edge.clicked.connect(self._add_edge_groups)
+        edit_constraints = QPushButton("Chỉnh constraints…")
+        edit_constraints.clicked.connect(self._edit_plan_constraints)
         remove = QPushButton("Xóa nhóm")
         remove.clicked.connect(lambda: self._remove_table_row(self.plan_table))
         buttons.addWidget(add)
         buttons.addWidget(edge)
+        buttons.addWidget(edit_constraints)
         buttons.addWidget(remove)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -263,17 +270,24 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel("<h2>Subtasks</h2>"))
+        layout.addWidget(QLabel(
+            "Mỗi subtask áp dụng constraints cho khoảng test đã chọn. "
+            "Constraints được kiểm tra lại trong quá trình Generate All."))
         self.subtask_table = QTableWidget(0, 4)
         self.subtask_table.setHorizontalHeaderLabels(
-            ["Subtask", "Test bắt đầu", "Test kết thúc", "Constraints (JSON)"])
+            ["Subtask", "Test bắt đầu", "Test kết thúc", "Constraints"])
         self.subtask_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.subtask_table.doubleClicked.connect(lambda _index: self._edit_subtask_constraints())
         layout.addWidget(self.subtask_table)
         buttons = QHBoxLayout()
         add = QPushButton("Thêm subtask")
         add.clicked.connect(self._add_subtask_row)
+        edit_constraints = QPushButton("Chỉnh constraints…")
+        edit_constraints.clicked.connect(self._edit_subtask_constraints)
         remove = QPushButton("Xóa")
         remove.clicked.connect(lambda: self._remove_table_row(self.subtask_table))
         buttons.addWidget(add)
+        buttons.addWidget(edit_constraints)
         buttons.addWidget(remove)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -770,43 +784,93 @@ class MainWindow(QMainWindow):
             self.nav.item(page_index).setHidden(not advanced)
         self.manifest_details.setVisible(advanced)
 
-    def _add_plan_row(self, values: tuple[str, int, str, str, str] | None = None) -> None:
-        values = values or ("Random", 1, "small", "increment", "{}")
+    def _add_plan_row(
+        self,
+        values: tuple[str, int, str, str] | None = None,
+        overrides: dict[str, Any] | None = None,
+    ) -> None:
+        values = values or ("Random", 1, "small", "increment")
         row = self.plan_table.rowCount()
         self.plan_table.insertRow(row)
         for column, value in enumerate(values):
             self.plan_table.setItem(row, column, QTableWidgetItem(str(value)))
+        constraint_item = QTableWidgetItem(summarize_constraints(overrides or {}))
+        constraint_item.setData(Qt.ItemDataRole.UserRole, overrides or {})
+        constraint_item.setFlags(
+            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        self.plan_table.setItem(row, 4, constraint_item)
+        self.plan_table.setCurrentCell(row, 0)
 
     def _add_edge_groups(self) -> None:
-        for values in (("n=1", 1, "edge", "increment", '{"n":{"min":1,"max":1}}'),
-                       ("Minimum values", 1, "edge", "increment", "{}"),
-                       ("Maximum values", 1, "max", "increment", "{}"),
-                       ("Adversarial", 1, "adversarial", "increment", "{}")):
-            self._add_plan_row(values)
+        groups = [
+            (("n=1", 1, "edge", "increment"), {"n": {"min": 1, "max": 1}}),
+            (("Minimum values", 1, "edge", "increment"), {}),
+            (("Maximum values", 1, "max", "increment"), {}),
+            (("Adversarial", 1, "adversarial", "increment"), {}),
+        ]
+        for values, overrides in groups:
+            self._add_plan_row(values, overrides)
+
+    def _edit_plan_constraints(self) -> None:
+        row = self.plan_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Test Plan", "Hãy chọn một nhóm test.")
+            return
+        item = self.plan_table.item(row, 4)
+        current = item.data(Qt.ItemDataRole.UserRole) if item else {}
+        dialog = ConstraintEditorDialog(
+            self.schema_builder.schema(), current,
+            title=f"Constraints — {self._cell(self.plan_table, row, 0)}", parent=self)
+        if dialog.exec() == ConstraintEditorDialog.DialogCode.Accepted:
+            constraints = dialog.constraints()
+            item.setData(Qt.ItemDataRole.UserRole, constraints)
+            item.setText(summarize_constraints(constraints))
 
     def _read_test_plan(self) -> list[TestGroup]:
         groups: list[TestGroup] = []
         for row in range(self.plan_table.rowCount()):
-            values = [self._cell(self.plan_table, row, column) for column in range(5)]
+            values = [self._cell(self.plan_table, row, column) for column in range(4)]
             try:
-                overrides = json.loads(values[4] or "{}")
+                item = self.plan_table.item(row, 4)
+                overrides = item.data(Qt.ItemDataRole.UserRole) if item else {}
                 groups.append(TestGroup(values[0] or "Random", int(values[1] or 1),
-                                        values[2] or "random", values[3] or "increment", overrides))
-            except (ValueError, json.JSONDecodeError) as exc:
+                                        values[2] or "random", values[3] or "increment",
+                                        overrides or {}))
+            except ValueError as exc:
                 raise ValueError(f"Test Plan dòng {row + 1} không hợp lệ: {exc}") from exc
         return groups
 
     def _fill_test_plan(self) -> None:
         self.plan_table.setRowCount(0)
         for group in self.project.test_plan:
-            self._add_plan_row((group.name, group.count, group.profile, group.seed_mode,
-                                json.dumps(group.overrides, ensure_ascii=False)))
+            self._add_plan_row(
+                (group.name, group.count, group.profile, group.seed_mode), group.overrides)
 
     def _add_subtask_row(self) -> None:
         row = self.subtask_table.rowCount()
         self.subtask_table.insertRow(row)
-        for column, value in enumerate((f"Subtask {row + 1}", 1, self.project.test_count, "{}")):
+        for column, value in enumerate((f"Subtask {row + 1}", 1, self.project.test_count)):
             self.subtask_table.setItem(row, column, QTableWidgetItem(str(value)))
+        item = QTableWidgetItem("Không override")
+        item.setData(Qt.ItemDataRole.UserRole, {})
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        self.subtask_table.setItem(row, 3, item)
+        self.subtask_table.setCurrentCell(row, 0)
+
+    def _edit_subtask_constraints(self) -> None:
+        row = self.subtask_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Subtasks", "Hãy chọn một subtask.")
+            return
+        item = self.subtask_table.item(row, 3)
+        current = item.data(Qt.ItemDataRole.UserRole) if item else {}
+        dialog = ConstraintEditorDialog(
+            self.schema_builder.schema(), current,
+            title=f"Constraints — {self._cell(self.subtask_table, row, 0)}", parent=self)
+        if dialog.exec() == ConstraintEditorDialog.DialogCode.Accepted:
+            constraints = dialog.constraints()
+            item.setData(Qt.ItemDataRole.UserRole, constraints)
+            item.setText(summarize_constraints(constraints))
 
     def _read_subtasks(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -816,9 +880,10 @@ class MainWindow(QMainWindow):
                     "name": self._cell(self.subtask_table, row, 0),
                     "start": int(self._cell(self.subtask_table, row, 1)),
                     "end": int(self._cell(self.subtask_table, row, 2)),
-                    "constraints": json.loads(self._cell(self.subtask_table, row, 3) or "{}"),
+                    "constraints": (
+                        self.subtask_table.item(row, 3).data(Qt.ItemDataRole.UserRole) or {}),
                 })
-            except (ValueError, json.JSONDecodeError) as exc:
+            except ValueError as exc:
                 raise ValueError(f"Subtask dòng {row + 1} không hợp lệ: {exc}") from exc
         return result
 
@@ -828,9 +893,15 @@ class MainWindow(QMainWindow):
             row = self.subtask_table.rowCount()
             self.subtask_table.insertRow(row)
             values = (item.get("name", "Subtask"), item.get("start", 1),
-                      item.get("end", 1), json.dumps(item.get("constraints", {}), ensure_ascii=False))
+                      item.get("end", 1))
             for column, value in enumerate(values):
                 self.subtask_table.setItem(row, column, QTableWidgetItem(str(value)))
+            constraints = item.get("constraints", {})
+            constraint_item = QTableWidgetItem(summarize_constraints(constraints))
+            constraint_item.setData(Qt.ItemDataRole.UserRole, constraints)
+            constraint_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.subtask_table.setItem(row, 3, constraint_item)
 
     @staticmethod
     def _remove_table_row(table: QTableWidget) -> None:
