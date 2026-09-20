@@ -61,12 +61,10 @@ def profile_overrides(
             continue
         override: dict[str, Any] = {}
         if category == "performance":
-            for key in ("max", "length", "count", "n", "m"):
-                if key in block:
-                    override[key] = block[key]
             if "max" in block and family == "scalar":
-                override["min"] = block["max"]
-                override["max"] = block["max"]
+                # Select the maximum of the *effective* range. Do not copy the
+                # schema maximum into min/max because a Subtask may tighten it.
+                override["mode"] = "maximum"
         if explicit_type and explicit_type != family:
             if override:
                 result[name] = override

@@ -73,6 +73,12 @@ dụ group cho `n=1..1000`, Subtask cho `n<=100` thì generator dùng `n=1..100`
 từ đầu. Sau khi sinh, app vẫn validate lần thứ hai để bảo vệ custom generator hoặc
 pattern không tuân thủ constraint.
 
+Thứ tự ưu tiên luôn là **schema → Test Plan → adversarial profile → giao Subtask**.
+Profile chỉ chọn mode/pattern (ví dụ Maximum hoặc One Dominant), không được ghi đè
+min/max của Test Plan hay Subtask. Performance profile chọn maximum của *khoảng
+hiệu lực*; nếu schema cho `n<=100000` nhưng Subtask cho `n<=100`, max-size của
+Subtask vẫn là `100`, không phải `100000`.
+
 ## 6. Cấu hình solution và validator
 
 Tại **Solution**:

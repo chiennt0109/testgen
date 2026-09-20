@@ -338,3 +338,51 @@ def test_mutation_tester_marks_performance_timeout(tmp_path:Path):
         tmp_path / "mutation")
     assert report.results[0].status == "timeout"
     assert report.results[0].reason == "max-size worst-case"
+
+def test_performance_profile_never_widens_subtask_constraints(tmp_path:Path):
+    project = Project(
+        problem_name="CLAMPED", input_filename="CLAMPED.inp",
+        generate_outputs=False, test_count=3,
+        schema=[
+            {"type": "integer", "name": "n", "min": 1, "max": 100000,
+             "newline": True},
+            {"type": "array", "name": "a", "length": "n", "min": -10**9,
+             "max": 10**9},
+        ],
+        test_plan=[PlanGroup(
+            "Small", 3, "small", "increment",
+            {"a": {"min": -3, "max": 3}})],
+        subtasks=[{
+            "name": "Small", "start": 1, "end": 3,
+            "constraints": {"n": {"min": 2, "max": 7},
+                            "a": {"min": -5, "max": 5}},
+            "strategy": {"performance_profiles": ["array:one_dominant_value"]},
+        }],
+    )
+    group = generation_group(project, 1)
+    assert group["overrides"]["n"]["mode"] == "maximum"
+    assert group["overrides"]["n"]["max"] == 7
+    target = GenerationPipeline().generate(
+        project, tmp_path, tmp_path / "generated" / "CLAMPED")
+    for input_path in target.glob("test*/*.inp"):
+        tokens = list(map(int, input_path.read_text().split()))
+        assert tokens[0] == 7
+        assert len(tokens[1:]) == 7
+        assert all(-3 <= value <= 3 for value in tokens[1:])
+
+def test_expression_bounds_are_intersected_not_replaced():
+    project = Project(
+        test_count=1,
+        schema=[{"type": "integer", "name": "limit", "min": 8, "max": 20},
+                {"type": "integer", "name": "n", "min": 1, "max": 100}],
+        test_plan=[PlanGroup("G", 1, "small", "increment",
+                             {"n": {"min": 2, "max": "limit"}})],
+        subtasks=[{"name": "S", "start": 1, "end": 1,
+                  "constraints": {"n": {"min": 5, "max": 10}}}],
+    )
+    rule = generation_group(project, 1)["overrides"]["n"]
+    assert rule["min"] == 5
+    assert rule["max"] == "min((limit),(10))"
+    text, context = GenerationEngine().generate(
+        project, 123, index=1, group=generation_group(project, 1))
+    assert 5 <= context["n"] <= min(context["limit"], 10)

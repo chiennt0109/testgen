@@ -96,8 +96,7 @@ def generation_group(project: Project, test_index: int) -> dict[str, Any]:
             break
         position = next_position
 
-    subtask_names: list[str] = []
-    selected_adversarial: list[dict[str, str]] = []
+    applicable_subtasks: list[dict[str, Any]] = []
     for subtask in project.subtasks:
         try:
             applies = int(subtask.get("start", 1)) <= test_index <= int(subtask.get("end", 1))
@@ -105,11 +104,13 @@ def generation_group(project: Project, test_index: int) -> dict[str, Any]:
             continue
         if not applies:
             continue
-        subtask_names.append(str(subtask.get("name", "Subtask")))
-        for variable, restriction in subtask.get("constraints", {}).items():
-            if isinstance(restriction, dict):
-                overrides[variable] = _intersect_rules(
-                    overrides.get(variable, {}), restriction)
+        applicable_subtasks.append(subtask)
+
+    subtask_names = [str(item.get("name", "Subtask")) for item in applicable_subtasks]
+    selected_adversarial: list[dict[str, str]] = []
+    # Profiles choose shape/mode first. Hard Subtask constraints are intersected
+    # afterwards so an adversarial/performance profile can never widen them.
+    for subtask in applicable_subtasks:
         strategy = subtask.get("strategy", {})
         if isinstance(strategy, dict):
             position = test_index - int(subtask.get("start", 1))
@@ -119,6 +120,11 @@ def generation_group(project: Project, test_index: int) -> dict[str, Any]:
                 overrides = merge_overrides(
                     overrides, profile_overrides(project.schema, profile, category))
                 selected_adversarial.append({"category": category, "profile": profile})
+    for subtask in applicable_subtasks:
+        for variable, restriction in subtask.get("constraints", {}).items():
+            if isinstance(restriction, dict):
+                overrides[variable] = _intersect_rules(
+                    overrides.get(variable, {}), restriction)
     return {
         "name": selected_name,
         "profile": selected_profile,
@@ -131,15 +137,23 @@ def generation_group(project: Project, test_index: int) -> dict[str, Any]:
 def _intersect_rules(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(first)
     for key, value in second.items():
-        if key == "min" and isinstance(value, (int, float)) and isinstance(result.get(key), (int, float)):
-            result[key] = max(result[key], value)
-        elif key == "max" and isinstance(value, (int, float)) and isinstance(result.get(key), (int, float)):
-            result[key] = min(result[key], value)
+        if key == "min" and key in result:
+            result[key] = _combine_bound("max", result[key], value)
+        elif key == "max" and key in result:
+            result[key] = _combine_bound("min", result[key], value)
         else:
             # Non-literal expressions are still enforced by the final validator.
             # Prefer the subtask restriction because it applies to this exact test.
             result[key] = copy.deepcopy(value)
     return result
+
+
+def _combine_bound(function: str, first: Any, second: Any) -> Any:
+    """Intersect literal or expression bounds without discarding either side."""
+
+    if isinstance(first, (int, float)) and isinstance(second, (int, float)):
+        return max(first, second) if function == "max" else min(first, second)
+    return f"{function}(({first}),({second}))"
 
 
 def _literal_bound_conflict(first: dict[str, Any], second: dict[str, Any]) -> str:
