@@ -175,6 +175,12 @@ nhóm riêng:
 - Performance profiles: max constraints và worst-case cho thuật toán naive.
 - Required coverage: các profile bắt buộc phải xuất hiện trong report.
 
+Strategy Editor hoàn toàn dùng GUI: chọn block family và profile từ combobox, bấm
+**Thêm profile**, dùng nút lên/xuống để sắp thứ tự luân phiên, và tick required
+coverage trong checklist. Tên/khoảng test của Subtask được chỉnh bằng nút
+**Sửa thông tin…** với spinbox; pattern constraint cũng được chọn từ dropdown.
+Không cần gõ danh sách profile hoặc JSON thủ công.
+
 Có thể ghi rõ block family, ví dụ `array:all_equal`, `query_list:hit`,
 `graph:path`. Các profile được luân phiên giữa các test của subtask và được ghi vào
 manifest cùng lý do/category.

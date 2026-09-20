@@ -15,7 +15,9 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QComboBox,
 )
+from app.core.adversarial import PROFILE_CATALOG
 
 class ConstraintEditorDialog(QDialog):
     """Edit per-block constraints without exposing serialized JSON."""
@@ -85,7 +87,8 @@ class ConstraintEditorDialog(QDialog):
             if size != "":
                 override["count" if kind in {"query_list", "operation_list", "interval_list"}
                          else "length"] = size
-            pattern = self._text(row, 7)
+            pattern_widget = self.table.cellWidget(row, 7)
+            pattern = pattern_widget.currentData() if isinstance(pattern_widget, QComboBox) else ""
             if pattern:
                 override["pattern"] = pattern.strip().lower().replace(" ", "_")
             if override:
@@ -122,16 +125,31 @@ class ConstraintEditorDialog(QDialog):
                 "" if exact != "" else values.get("min", ""),
                 "" if exact != "" else values.get("max", ""),
                 size,
-                str(values.get("pattern", "")).replace("_", " ").title(),
             )
             for column, value in enumerate(row_values, 3):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))
+            pattern_combo = QComboBox()
+            pattern_combo.addItem("— Không đổi —", "")
+            family = self._family(kind)
+            for pattern in PROFILE_CATALOG.get(family, ()):
+                pattern_combo.addItem(pattern.replace("_", " ").title(), pattern)
+            current_pattern = values.get("pattern", "")
+            index = pattern_combo.findData(current_pattern)
+            if current_pattern and index < 0:
+                pattern_combo.addItem(
+                    str(current_pattern).replace("_", " ").title(), current_pattern)
+                index = pattern_combo.count() - 1
+            pattern_combo.setCurrentIndex(max(0, index))
+            self.table.setCellWidget(row, 7, pattern_combo)
 
     def _clear(self) -> None:
         for row in range(self.table.rowCount()):
             self.table.item(row, 0).setCheckState(Qt.CheckState.Unchecked)
-            for column in range(3, 8):
+            for column in range(3, 7):
                 self.table.item(row, column).setText("")
+            pattern = self.table.cellWidget(row, 7)
+            if isinstance(pattern, QComboBox):
+                pattern.setCurrentIndex(0)
 
     def _text(self, row: int, column: int) -> str:
         item = self.table.item(row, column)
@@ -148,6 +166,18 @@ class ConstraintEditorDialog(QDialog):
                 return float(text)
             except ValueError:
                 return text
+
+    @staticmethod
+    def _family(kind: str) -> str:
+        if kind in {"array", "permutation"}:
+            return "array"
+        if kind in {"query_list", "operation_list", "interval_list"}:
+            return "query_list"
+        if "tree" in kind:
+            return "tree"
+        if "graph" in kind:
+            return "graph"
+        return kind
 
 
 def summarize_constraints(constraints: dict[str, Any]) -> str:

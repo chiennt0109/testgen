@@ -51,6 +51,7 @@ from app.validators import validate_input, validate_subtasks
 from .schema_builder import SchemaBuilder
 from .constraint_editor import ConstraintEditorDialog, summarize_constraints
 from .strategy_editor import StrategyEditorDialog, summarize_strategy
+from .subtask_editor import SubtaskEditorDialog
 
 
 class Worker(QObject):
@@ -287,13 +288,13 @@ class MainWindow(QMainWindow):
         self.subtask_table.setHorizontalHeaderLabels(
             ["Subtask", "Test bắt đầu", "Test kết thúc", "Constraints", "Adversarial strategy"])
         self.subtask_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.subtask_table.doubleClicked.connect(
-            lambda index: self._edit_subtask_strategy()
-            if index.column() == 4 else self._edit_subtask_constraints())
+        self.subtask_table.doubleClicked.connect(self._edit_subtask_column)
         layout.addWidget(self.subtask_table)
         buttons = QHBoxLayout()
         add = QPushButton("Thêm subtask")
         add.clicked.connect(self._add_subtask_row)
+        edit_info = QPushButton("Sửa thông tin…")
+        edit_info.clicked.connect(self._edit_subtask_info)
         edit_constraints = QPushButton("Chỉnh constraints…")
         edit_constraints.clicked.connect(self._edit_subtask_constraints)
         edit_strategy = QPushButton("Chỉnh strategy…")
@@ -301,6 +302,7 @@ class MainWindow(QMainWindow):
         remove = QPushButton("Xóa")
         remove.clicked.connect(lambda: self._remove_table_row(self.subtask_table))
         buttons.addWidget(add)
+        buttons.addWidget(edit_info)
         buttons.addWidget(edit_constraints)
         buttons.addWidget(edit_strategy)
         buttons.addWidget(remove)
@@ -993,10 +995,18 @@ class MainWindow(QMainWindow):
                 (group.name, group.count, group.profile, group.seed_mode), group.overrides)
 
     def _add_subtask_row(self) -> None:
+        default_name = f"Subtask {self.subtask_table.rowCount() + 1}"
+        dialog = SubtaskEditorDialog(
+            default_name, 1, self.project.test_count, self.project.test_count, self)
+        if dialog.exec() != SubtaskEditorDialog.DialogCode.Accepted:
+            return
+        name, start, end = dialog.values()
         row = self.subtask_table.rowCount()
         self.subtask_table.insertRow(row)
-        for column, value in enumerate((f"Subtask {row + 1}", 1, self.project.test_count)):
-            self.subtask_table.setItem(row, column, QTableWidgetItem(str(value)))
+        for column, value in enumerate((name, start, end)):
+            item = QTableWidgetItem(str(value))
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.subtask_table.setItem(row, column, item)
         item = QTableWidgetItem("Không override")
         item.setData(Qt.ItemDataRole.UserRole, {})
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
@@ -1006,6 +1016,28 @@ class MainWindow(QMainWindow):
         strategy_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self.subtask_table.setItem(row, 4, strategy_item)
         self.subtask_table.setCurrentCell(row, 0)
+
+    def _edit_subtask_info(self) -> None:
+        row = self.subtask_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Subtasks", "Hãy chọn một subtask.")
+            return
+        dialog = SubtaskEditorDialog(
+            self._cell(self.subtask_table, row, 0),
+            int(self._cell(self.subtask_table, row, 1)),
+            int(self._cell(self.subtask_table, row, 2)),
+            self.project.test_count, self)
+        if dialog.exec() == SubtaskEditorDialog.DialogCode.Accepted:
+            for column, value in enumerate(dialog.values()):
+                self.subtask_table.item(row, column).setText(str(value))
+
+    def _edit_subtask_column(self, index: Any) -> None:
+        if index.column() <= 2:
+            self._edit_subtask_info()
+        elif index.column() == 3:
+            self._edit_subtask_constraints()
+        else:
+            self._edit_subtask_strategy()
 
     def _edit_subtask_constraints(self) -> None:
         row = self.subtask_table.currentRow()
@@ -1060,7 +1092,9 @@ class MainWindow(QMainWindow):
             values = (item.get("name", "Subtask"), item.get("start", 1),
                       item.get("end", 1))
             for column, value in enumerate(values):
-                self.subtask_table.setItem(row, column, QTableWidgetItem(str(value)))
+                value_item = QTableWidgetItem(str(value))
+                value_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                self.subtask_table.setItem(row, column, value_item)
             constraints = item.get("constraints", {})
             constraint_item = QTableWidgetItem(summarize_constraints(constraints))
             constraint_item.setData(Qt.ItemDataRole.UserRole, constraints)
