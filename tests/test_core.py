@@ -1,0 +1,388 @@
+import hashlib,json,random,zipfile
+from pathlib import Path
+import pytest
+from app.core.constraints import ConstraintError,evaluate
+from app.core.engine import GenerationEngine
+from app.core.pipeline import GenerationPipeline
+from app.exporters import export_zip
+from app.generators.blocks import array,graph,query_list,tree
+from app.generators.queries import generate_queries
+from app.models import Project, TestGroup as PlanGroup
+from app.core.stress import StressTester, normalize_output
+from app.core.planning import audit_plan, generation_group
+from app.runners import SolutionRunner
+from app.core.mutation import Candidate, MutationTester, TargetedCase
+from app.analyzers import analyze_strength
+from app.validators import validate_subtasks
+
+def test_constraint_engine():
+    assert evaluate("n*(n-1)/2",{"n":5})==10
+    assert evaluate("min(n, 3) + max(2, 5)", {"n": 10}) == 8
+    with pytest.raises(ConstraintError):evaluate("__import__('os')",{})
+
+@pytest.mark.parametrize("pattern",["random","all_equal","strict_increasing","decreasing","many_duplicates","binary","mountain"])
+def test_array_generator(pattern):
+    result=array({"length":10,"min":0,"max":20,"pattern":pattern},{},random.Random(2))
+    assert len(result)==10 and all(0<=x<=20 for x in result)
+
+def test_graph_simple_connected():
+    edges=graph({"n":8,"m":12,"connected":True,"simple":True},{},random.Random(3))
+    assert len(edges)==len({tuple(sorted(e)) for e in edges})==12
+    reached={1}
+    while True:
+        old=len(reached);reached|={v for u,v in edges if u in reached}|{u for u,v in edges if v in reached}
+        if len(reached)==old:break
+    assert len(reached)==8
+
+@pytest.mark.parametrize("pattern",["random_tree","path","star","balanced_binary_tree","broom","caterpillar"])
+def test_tree_generator(pattern):
+    edges=tree({"n":20,"pattern":pattern},{},random.Random(1));assert len(edges)==19
+    assert all(1<=u<=20 and 1<=v<=20 for u,v in edges)
+
+def test_query_ranges():
+    for mode in ["random_range","single_point","whole_range","prefix","suffix","nested"]:
+        assert all(1<=l<=r<=30 for l,r in query_list({"count":50,"n":30,"pattern":mode},{},random.Random(9)))
+
+def test_seed_reproducibility():
+    p=Project(schema=[{"type":"integer","name":"n","min":5,"max":5,"layout":"same_line"},{"type":"array","name":"a","length":"n","min":-5,"max":5}])
+    one=GenerationEngine().generate(p,123)[0];two=GenerationEngine().generate(p,123)[0]
+    assert one==two and hashlib.sha256(one.encode()).digest()==hashlib.sha256(two.encode()).digest()
+
+def test_duplicate_detection_and_folder_export(tmp_path:Path):
+    p=Project(problem_name="X",input_filename="X.inp",output_filename="X.out",test_count=2,duplicate_policy="warn",schema=[{"type":"integer","name":"n","min":1,"max":1}])
+    target=GenerationPipeline().generate(p,tmp_path,tmp_path/"generated"/"X")
+    manifest=json.loads((target/"manifest.json").read_text());assert manifest["tests"][1]["duplicate_of"]==1
+    archive=export_zip(target,tmp_path/"X.zip")
+    with zipfile.ZipFile(archive) as z: assert "X/test01/X.inp" in z.namelist()
+
+def test_output_normalization():
+    assert normalize_output("  1  2\n3\n") == "1 2 3"
+
+def test_schema_driven_range_query_dependencies():
+    spec = {
+        "count": 100,
+        "pattern": "random_range",
+        "query_types": [{
+            "name": "Range", "weight": 100,
+            "fields": [
+                {"name": "l", "type": "integer", "min": 1, "max": "n"},
+                {"name": "r", "type": "integer", "min": "l", "max": "n"},
+            ],
+        }],
+    }
+    rows = generate_queries(spec, {"n": 20}, random.Random(22))
+    assert len(rows) == 100
+    assert all(1 <= left <= right <= 20 for left, right in rows)
+
+def test_mixed_weighted_query_types_and_fixed_prefixes():
+    spec = {
+        "count": 200,
+        "query_types": [
+            {"name": "Update", "weight": 40, "prefix": 1, "fields": [
+                {"name": "i", "type": "integer", "min": 1, "max": "n"},
+                {"name": "x", "type": "integer", "min": -10**9, "max": 10**9},
+            ]},
+            {"name": "Range", "weight": 60, "prefix": 2, "fields": [
+                {"name": "l", "type": "integer", "min": 1, "max": "n"},
+                {"name": "r", "type": "integer", "min": "l", "max": "n"},
+            ]},
+        ],
+    }
+    rows = generate_queries(spec, {"n": 30}, random.Random(7))
+    assert {row[0] for row in rows} == {1, 2}
+    assert all(len(row) == 3 for row in rows)
+    assert all(row[0] != 2 or 1 <= row[1] <= row[2] <= 30 for row in rows)
+
+def test_query_output_layout_is_not_implicit():
+    base = {
+        "type": "query_list", "name": "queries", "count": 2,
+        "pattern": "whole_range",
+        "query_types": [{"name": "Range", "weight": 100, "fields": [
+            {"name": "l", "type": "integer", "min": 1, "max": "n"},
+            {"name": "r", "type": "integer", "min": "l", "max": "n"},
+        ]}],
+    }
+    multiline = Project(schema=[{"type": "integer", "name": "n", "min": 5, "max": 5, "newline": True}, {**base, "one_query_per_line": True}])
+    singleline = Project(schema=[{"type": "integer", "name": "n", "min": 5, "max": 5, "newline": True}, {**base, "one_query_per_line": False, "layout": "same_line"}])
+    assert GenerationEngine().generate(multiline, 1)[0].splitlines() == ["5", "1 5", "1 5"]
+    assert GenerationEngine().generate(singleline, 1)[0].splitlines() == ["5", "1 5 1 5"]
+
+@pytest.mark.parametrize("pattern", ["random_range", "single_point", "whole_range", "prefix", "suffix", "short_range", "long_range", "nested", "overlapping", "repeated"])
+def test_query_patterns_respect_schema(pattern):
+    spec = {
+        "count": 12, "pattern": pattern,
+        "query_types": [{"name": "Range", "weight": 100, "fields": [
+            {"name": "l", "type": "integer", "min": 1, "max": "n"},
+            {"name": "r", "type": "integer", "min": "l", "max": "n"},
+        ]}],
+    }
+    rows = generate_queries(spec, {"n": 20}, random.Random(19))
+    assert all(1 <= left <= right <= 20 for left, right in rows)
+    if pattern == "single_point": assert all(left == right for left, right in rows)
+    if pattern == "whole_range": assert all((left, right) == (1, 20) for left, right in rows)
+    if pattern == "prefix": assert all(left == 1 for left, _ in rows)
+    if pattern == "suffix": assert all(right == 20 for _, right in rows)
+
+def test_query_duplicate_avoid_and_sorted_order():
+    spec = {
+        "count": 5, "duplicate_policy": "avoid", "query_order": "sorted",
+        "query_types": [{"name": "Point", "weight": 100, "fields": [
+            {"name": "x", "type": "integer", "min": 1, "max": 20},
+        ]}],
+    }
+    rows = generate_queries(spec, {}, random.Random(31))
+    assert len(rows) == len(set(rows)) == 5
+    assert rows == sorted(rows, key=lambda row: tuple(str(value) for value in row))
+
+def test_subtask_constraints_validate_scalar_and_array_context():
+    subtasks = [{
+        "name": "Small", "start": 1, "end": 5,
+        "constraints": {
+            "n": {"min": 1, "max": 10},
+            "a": {"length": "n", "min": -5, "max": 5},
+        },
+    }]
+    assert validate_subtasks(2, {"n": 3, "a": [-5, 0, 5]}, subtasks) == (True, "")
+    valid, reason = validate_subtasks(2, {"n": 3, "a": [-6, 0, 5]}, subtasks)
+    assert not valid and "below -5" in reason
+    assert validate_subtasks(8, {"n": 100, "a": []}, subtasks) == (True, "")
+
+def test_pipeline_rejects_test_outside_subtask_constraint(tmp_path:Path):
+    project = Project(
+        problem_name="SUBTASK", input_filename="SUBTASK.inp", test_count=1,
+        schema=[{"type": "integer", "name": "n", "min": 20, "max": 20}],
+        subtasks=[{"name": "n <= 10", "start": 1, "end": 1,
+                  "constraints": {"n": {"max": 10}}}],
+    )
+    with pytest.raises((RuntimeError, ConstraintError)):
+        GenerationPipeline().generate(project, tmp_path, tmp_path / "generated" / "SUBTASK")
+
+def test_stress_tester_uses_profile_and_runs_repeatedly(tmp_path:Path):
+    (tmp_path / "solution.py").write_text(
+        "import sys\nprint(int(sys.stdin.read().strip()) * 2)\n", encoding="utf-8")
+    (tmp_path / "brute.py").write_text(
+        "import sys\nn=int(sys.stdin.read().strip())\nprint(n+n)\n", encoding="utf-8")
+    project = Project(
+        solution_path="solution.py", brute_path="brute.py", test_count=1,
+        schema=[{"type": "integer", "name": "n", "min": 1, "max": 100}],
+        test_plan=[PlanGroup("Tiny", 1, "small", "increment",
+                             {"n": {"min": 5, "max": 5}})],
+    )
+    progress: list[tuple[int, int, int]] = []
+    result = StressTester().run(
+        project, tmp_path, 3, 1.0, profile="Small random",
+        progress=lambda current, total, seed, _elapsed: progress.append((current, total, seed)))
+    assert result.passed == 3 and result.failed == 0
+    assert [item[0] for item in progress] == [1, 2, 3]
+    assert not (tmp_path / ".tgs-build").exists()
+
+def test_plan_audit_finds_count_mismatch_and_group_subtask_conflict():
+    project = Project(
+        test_count=20,
+        test_plan=[
+            PlanGroup("sub1", 1, "small", "increment", {"n": {"min": 1, "max": 1999}}),
+            PlanGroup("sub2", 1, "large", "increment", {"n": {"min": 2000, "max": 100000}}),
+        ],
+        subtasks=[{"name": "Subtask 1", "start": 1, "end": 6,
+                  "constraints": {"n": {"min": 1, "max": 1999}}}],
+    )
+    audit = audit_plan(project)
+    assert any("Test Plan có 2 test" in warning for warning in audit.warnings)
+    assert any("test02" in error and "xung đột" in error for error in audit.errors)
+
+def test_pipeline_saves_runtime_error_diagnostics(tmp_path:Path):
+    (tmp_path / "bad.py").write_text(
+        "import sys\nsys.stderr.write('boom\\n')\nraise SystemExit(7)\n", encoding="utf-8")
+    project = Project(
+        problem_name="BAD", input_filename="BAD.inp", output_filename="BAD.out",
+        solution_path="bad.py", test_count=1,
+        schema=[{"type": "integer", "name": "n", "min": 1, "max": 1}],
+    )
+    with pytest.raises(RuntimeError, match="exit code: 7"):
+        GenerationPipeline().generate(project, tmp_path, tmp_path / "generated" / "BAD")
+    failure = tmp_path / "generation_failures" / "test01"
+    assert (failure / "BAD.inp").read_text(encoding="utf-8").strip() == "1"
+    assert "boom" in (failure / "stderr.txt").read_text(encoding="utf-8")
+    assert json.loads((failure / "run.json").read_text(encoding="utf-8"))["returncode"] == 7
+
+def test_generate_inputs_can_skip_broken_solution(tmp_path:Path):
+    (tmp_path / "bad.py").write_text("raise SystemExit(9)\n", encoding="utf-8")
+    project = Project(
+        problem_name="INPUT_ONLY", input_filename="INPUT_ONLY.inp",
+        output_filename="INPUT_ONLY.out", solution_path="bad.py",
+        generate_outputs=False, test_count=1,
+        schema=[{"type": "integer", "name": "n", "min": 3, "max": 3}],
+    )
+    target = GenerationPipeline().generate(
+        project, tmp_path, tmp_path / "generated" / "INPUT_ONLY")
+    assert (target / "test01" / "INPUT_ONLY.inp").read_text().strip() == "3"
+    assert not (target / "test01" / "INPUT_ONLY.out").exists()
+
+def test_subtask_constraints_restrict_generation_not_only_validation(tmp_path:Path):
+    project = Project(
+        problem_name="PLANNED", input_filename="PLANNED.inp",
+        generate_outputs=False, test_count=4,
+        schema=[{"type": "integer", "name": "n", "min": 1, "max": 100}],
+        test_plan=[PlanGroup("Small", 2, "small", "increment",
+                             {"n": {"min": 1, "max": 20}}),
+                   PlanGroup("Large", 2, "large", "increment",
+                             {"n": {"min": 50, "max": 100}})],
+        subtasks=[
+            {"name": "Sub 1", "start": 1, "end": 2,
+             "constraints": {"n": {"max": 5}}},
+            {"name": "Sub 2", "start": 3, "end": 4,
+             "constraints": {"n": {"min": 80}}},
+        ],
+    )
+    assert generation_group(project, 1)["overrides"]["n"] == {"min": 1, "max": 5}
+    assert generation_group(project, 3)["overrides"]["n"] == {"min": 80, "max": 100}
+    target = GenerationPipeline().generate(
+        project, tmp_path, tmp_path / "generated" / "PLANNED")
+    values = [int((target / f"test{i:02d}" / "PLANNED.inp").read_text())
+              for i in range(1, 5)]
+    assert all(1 <= value <= 5 for value in values[:2])
+    assert all(80 <= value <= 100 for value in values[2:])
+    manifest = json.loads((target / "manifest.json").read_text())
+    assert manifest["tests"][0]["group"] == "Small"
+    assert manifest["tests"][0]["subtasks"] == ["Sub 1"]
+
+def test_windows_compile_command_static_links_mingw_runtime():
+    command = SolutionRunner("g++").compile_command(
+        Path("solution.cpp"), Path("solution.exe"), windows=True)
+    assert "-static" in command
+    assert "-static-libgcc" in command
+    assert "-static-libstdc++" in command
+
+def test_windows_missing_dll_runtime_hint():
+    from app.runners import RunResult
+    hint = GenerationPipeline.run_hint(
+        Project(), RunResult("RUNTIME ERROR", returncode=3221225781))
+    assert "0xC0000135" in hint and "DLL" in hint
+
+def test_subtask_bounds_on_query_list_restrict_query_fields():
+    spec = {
+        "count": 30, "min": 3, "max": 7, "pattern": "random_range",
+        "query_types": [{"name": "Range", "weight": 100, "fields": [
+            {"name": "l", "type": "integer", "min": 1, "max": "n"},
+            {"name": "r", "type": "integer", "min": "l", "max": "n"},
+        ]}],
+    }
+    rows = generate_queries(spec, {"n": 100}, random.Random(91))
+    assert all(3 <= left <= right <= 7 for left, right in rows)
+
+def test_query_relations_hit_miss_and_frequency():
+    context = {"a": [2, 2, 2, 5, 7, 7]}
+    def values(mode):
+        return generate_queries({"count": 10, "query_types": [{
+            "name": mode, "weight": 100, "fields": [{
+                "name": "x", "type": "integer", "min": 1, "max": 10,
+                "relation": {"source": "a", "mode": mode},
+            }]}]}, context, random.Random(4))
+    assert all(row[0] in context["a"] for row in values("hit"))
+    assert all(row[0] not in context["a"] for row in values("miss"))
+    assert {row[0] for row in values("most_frequent")} == {2}
+    assert {row[0] for row in values("least_frequent")} == {5}
+
+@pytest.mark.parametrize("demo", ["FREQUENCY", "RANGESUM", "GRAPH_TREE"])
+def test_adversarial_demos_kill_all_three_candidates(tmp_path:Path, demo:str):
+    import importlib.util
+    root = Path("examples") / demo
+    spec = importlib.util.spec_from_file_location(f"demo_{demo}", root / "generator.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    cases = [TargetedCase(module.generate(seed, {"test_index": seed}), seed,
+                          f"{demo} adversarial case {seed}") for seed in range(1, 5)]
+    candidates = [Candidate(path.stem, path, 1.0)
+                  for path in sorted(root.glob("wrong_*.py"))]
+    report = MutationTester().run(root / "solution.py", candidates, cases, tmp_path / demo)
+    assert len(report.results) == 3
+    assert report.coverage == 1.0
+    assert all(result.status == "killed" for result in report.results)
+    assert all(result.reason for result in report.results)
+
+def test_subtask_strategy_rotates_targeted_profiles():
+    project = Project(
+        test_count=3,
+        schema=[{"type": "integer", "name": "n", "min": 1, "max": 5},
+                {"type": "array", "name": "a", "length": "n", "min": 1, "max": 9}],
+        subtasks=[{"name": "S", "start": 1, "end": 3, "constraints": {},
+                  "strategy": {"edge_profiles": ["array:all_equal", "array:all_distinct"],
+                               "performance_profiles": ["array:one_dominant_value"],
+                               "required_coverage": ["all_equal"]}}],
+    )
+    groups = [generation_group(project, index) for index in range(1, 4)]
+    assert [group["overrides"]["a"]["pattern"] for group in groups] == [
+        "all_equal", "all_distinct", "one_dominant_value"]
+    assert [group["adversarial_profiles"][0]["category"] for group in groups] == [
+        "edge", "edge", "performance"]
+
+def test_strength_analyzer_warns_about_weak_distribution(tmp_path:Path):
+    folder = tmp_path / "suite"; (folder / "test01").mkdir(parents=True); (folder / "test02").mkdir()
+    (folder / "manifest.json").write_text(json.dumps({"tests": [
+        {"adversarial_profiles": [{"category": "edge", "profile": "minimum"}]},
+        {"adversarial_profiles": []},
+    ]}), encoding="utf-8")
+    (folder / "test01" / "X.out").write_text("0\n"); (folder / "test02" / "X.out").write_text("0\n")
+    report = analyze_strength(folder, ["hit", "miss", "maximum"])
+    assert "Quá nhiều output bằng 0" in report["warnings"]
+    assert any("required coverage" in warning for warning in report["warnings"])
+
+def test_mutation_tester_marks_performance_timeout(tmp_path:Path):
+    reference = tmp_path / "reference.py"; slow = tmp_path / "linear_scan_per_query.py"
+    reference.write_text("print(1)\n", encoding="utf-8")
+    slow.write_text("import time\ntime.sleep(1)\nprint(1)\n", encoding="utf-8")
+    report = MutationTester().run(
+        reference, [Candidate("linear_scan_per_query", slow, .05)],
+        [TargetedCase("", 99, "max-size worst-case", "performance")],
+        tmp_path / "mutation")
+    assert report.results[0].status == "timeout"
+    assert report.results[0].reason == "max-size worst-case"
+
+def test_performance_profile_never_widens_subtask_constraints(tmp_path:Path):
+    project = Project(
+        problem_name="CLAMPED", input_filename="CLAMPED.inp",
+        generate_outputs=False, test_count=3,
+        schema=[
+            {"type": "integer", "name": "n", "min": 1, "max": 100000,
+             "newline": True},
+            {"type": "array", "name": "a", "length": "n", "min": -10**9,
+             "max": 10**9},
+        ],
+        test_plan=[PlanGroup(
+            "Small", 3, "small", "increment",
+            {"a": {"min": -3, "max": 3}})],
+        subtasks=[{
+            "name": "Small", "start": 1, "end": 3,
+            "constraints": {"n": {"min": 2, "max": 7},
+                            "a": {"min": -5, "max": 5}},
+            "strategy": {"performance_profiles": ["array:one_dominant_value"]},
+        }],
+    )
+    group = generation_group(project, 1)
+    assert group["overrides"]["n"]["mode"] == "maximum"
+    assert group["overrides"]["n"]["max"] == 7
+    target = GenerationPipeline().generate(
+        project, tmp_path, tmp_path / "generated" / "CLAMPED")
+    for input_path in target.glob("test*/*.inp"):
+        tokens = list(map(int, input_path.read_text().split()))
+        assert tokens[0] == 7
+        assert len(tokens[1:]) == 7
+        assert all(-3 <= value <= 3 for value in tokens[1:])
+
+def test_expression_bounds_are_intersected_not_replaced():
+    project = Project(
+        test_count=1,
+        schema=[{"type": "integer", "name": "limit", "min": 8, "max": 20},
+                {"type": "integer", "name": "n", "min": 1, "max": 100}],
+        test_plan=[PlanGroup("G", 1, "small", "increment",
+                             {"n": {"min": 2, "max": "limit"}})],
+        subtasks=[{"name": "S", "start": 1, "end": 1,
+                  "constraints": {"n": {"min": 5, "max": 10}}}],
+    )
+    rule = generation_group(project, 1)["overrides"]["n"]
+    assert rule["min"] == 5
+    assert rule["max"] == "min((limit),(10))"
+    text, context = GenerationEngine().generate(
+        project, 123, index=1, group=generation_group(project, 1))
+    assert 5 <= context["n"] <= min(context["limit"], 10)

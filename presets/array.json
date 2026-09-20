@@ -1,0 +1,1 @@
+{"name":"Array","schema":[{"type":"integer","name":"n","min":1,"max":100000,"newline":true},{"type":"array","name":"a","length":"n","min":-1000000000,"max":1000000000}],"test_profiles":["all_equal","strict_increasing","strict_decreasing","many_duplicates","extreme_values","random"]}
