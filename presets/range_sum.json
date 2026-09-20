@@ -1,0 +1,28 @@
+{
+  "name": "Prefix Sum / Range Query",
+  "schema": [
+    {"type": "integer", "name": "n", "min": 1, "max": 100000, "layout": "same_line"},
+    {"type": "integer", "name": "q", "min": 1, "max": 100000, "newline": true},
+    {"type": "array", "name": "a", "length": "n", "min": -1000000000, "max": 1000000000},
+    {
+      "type": "query_list",
+      "name": "queries",
+      "count": "q",
+      "pattern": "random_range",
+      "duplicate_policy": "allow",
+      "query_order": "random",
+      "one_query_per_line": true,
+      "query_types": [
+        {
+          "name": "Range Query",
+          "weight": 100,
+          "fields": [
+            {"name": "l", "type": "integer", "min": 1, "max": "n"},
+            {"name": "r", "type": "integer", "min": "l", "max": "n"}
+          ]
+        }
+      ]
+    }
+  ],
+  "test_profiles": ["single_point", "whole_range", "prefix", "suffix", "short_range", "long_range", "nested", "overlapping", "repeated", "random_range"]
+}
